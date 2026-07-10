@@ -1,0 +1,4 @@
+npm --prefix frontend run build
+rm -rf backend/static
+cp -r frontend/out backend/static
+uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload

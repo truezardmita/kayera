@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+*.db
+*.sqlite
+
+# Next.js / Node
+node_modules/
+.next/
+out/
+backend/static/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
