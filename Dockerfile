@@ -16,19 +16,18 @@ RUN npm run build
 FROM python:3.10-slim
 WORKDIR /app
 
-
 # Copy backend requirements
-COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/requirements.txt ./backend/
+RUN pip install --no-cache-dir -r ./backend/requirements.txt
 
 # Copy backend application
-COPY backend/ ./
+COPY backend/ ./backend/
 
-# Copy compiled static frontend files into FastAPI's static folder
-COPY --from=frontend-builder /app/frontend/out/ ./static/
+# Copy compiled static frontend files into FastAPI's static folder inside backend
+COPY --from=frontend-builder /app/frontend/out/ ./backend/static/
 
 # Expose port (Railway will set PORT env var)
 EXPOSE 8080
 
 # Command to run backend. It will read PORT env var or default to 8080
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

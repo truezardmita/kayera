@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from datetime import datetime
-from .database import Category, Product, ProductItem, Transaction, Setting
+from backend.database import Category, Product, ProductItem, Transaction, Setting
 import string
 import random
 
