@@ -445,14 +445,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 return
 
             if tx.status == "completed":
-                # Already complete
+                # Already complete — resend as file
                 content = tx.product_item.content if tx.product_item else "Credentials manual (Hubungi Admin)"
                 await query.edit_message_text(
-                    f"✅ *Pembayaran Berhasil!*\n\n"
-                    f"Terima kasih atas pembelian Anda untuk produk *{tx.product.name}*.\n\n"
-                    f"🔑 *Data Produk Anda:*\n`{content}`\n\n"
-                    "Simpan data ini baik-baik.",
-                    parse_mode="Markdown"
+                    f"✅ *Pembayaran sudah terverifikasi!*\n"
+                    f"Mengirimkan ulang file data produk Anda..."
+                )
+                await send_product_as_file(
+                    bot=query.get_bot(),
+                    chat_id=query.from_user.id,
+                    order_id=tx.order_id,
+                    product_name=tx.product.name if tx.product else "Produk",
+                    item_content=content
                 )
                 return
 
@@ -483,12 +487,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 completed_tx, item_content = database_crud.complete_transaction(db, tx.order_id)
                 if completed_tx.status == "completed":
                     val_content = item_content if item_content else "Hubungi admin untuk mendapatkan data manual (stok habis saat pembayaran)."
-                    await query.edit_message_text(
-                        f"✅ *Pembayaran Berhasil Terverifikasi!*\n\n"
-                        f"Terima kasih atas pembelian Anda untuk produk *{tx.product.name}*.\n\n"
-                        f"🔑 *Data Produk Anda:*\n`{val_content}`\n\n"
-                        "Terima kasih telah berbelanja di store kami!",
-                        parse_mode="Markdown"
+                    await query.edit_message_text("✅ *Pembayaran terverifikasi!* Mengirimkan file data produk...", parse_mode="Markdown")
+                    await send_product_as_file(
+                        bot=query.get_bot(),
+                        chat_id=query.from_user.id,
+                        order_id=tx.order_id,
+                        product_name=tx.product.name if tx.product else "Produk",
+                        item_content=val_content
                     )
                 else:
                     await query.answer("Gagal memproses transaksi. Hubungi admin.", show_alert=True)
@@ -532,6 +537,38 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     finally:
         db.close()
 
+# Helper: Send product data as a .txt file
+async def send_product_as_file(bot, chat_id: int, order_id: str, product_name: str, item_content: str):
+    """Sends the product data as a downloadable .txt file to the user."""
+    file_content = (
+        f"============================\n"
+        f"  ORDER: {order_id}\n"
+        f"  PRODUK: {product_name}\n"
+        f"============================\n\n"
+        f"{item_content}\n\n"
+        f"============================\n"
+        f"Terima kasih telah berbelanja!\n"
+        f"Simpan file ini dengan aman.\n"
+        f"============================"
+    )
+    file_bio = io.BytesIO(file_content.encode("utf-8"))
+    file_bio.name = f"order_{order_id}.txt"
+    file_bio.seek(0)
+    await bot.send_document(
+        chat_id=chat_id,
+        document=file_bio,
+        filename=f"order_{order_id}.txt",
+        caption=(
+            f"✅ *PEMBAYARAN DITERIMA!*\n\n"
+            f"Order: `{order_id}`\n"
+            f"Produk: *{product_name}*\n\n"
+            f"📄 Data produk Anda ada di file di atas.\n"
+            f"Simpan file tersebut dengan aman!"
+        ),
+        parse_mode="Markdown"
+    )
+
+
 # Generate QR Code binary stream helper
 def generate_qr_code(qr_string: str) -> io.BytesIO:
     qr = qrcode.QRCode(
@@ -558,22 +595,17 @@ async def notify_user_payment_success(application: Application, order_id: str, i
             return
 
         chat_id = tx.telegram_user_id
-        text = (
-            f"✅ *PEMBAYARAN DITERIMA!*\n\n"
-            f"Pembayaran untuk order `{order_id}` telah terverifikasi otomatis.\n"
-            f"Nama Produk: *{clean_md(tx.product.name)}*\n"
-            f"Nominal: Rp {tx.total_payment:,.0f}\n\n"
-            f"🔑 *Data Produk Anda:*\n`{item_content}`\n\n"
-            "Terima kasih telah berbelanja!"
-        )
+        product_name = tx.product.name if tx.product else "Produk"
         try:
-            await application.bot.send_message(
+            await send_product_as_file(
+                bot=application.bot,
                 chat_id=chat_id,
-                text=text,
-                parse_mode="Markdown"
+                order_id=order_id,
+                product_name=product_name,
+                item_content=item_content
             )
         except Exception as bot_err:
-            logger.error(f"Error sending success message to telegram user {chat_id}: {bot_err}")
+            logger.error(f"Error sending success file to telegram user {chat_id}: {bot_err}")
     finally:
         db.close()
 
