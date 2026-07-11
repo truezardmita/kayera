@@ -61,6 +61,7 @@ export default function AdminDashboard() {
   // Settings fields
   const [settingsForm, setSettingsForm] = useState({
     telegram_bot_token: "",
+    telegram_channel_id: "",
     bot_active: "false",
     bot_welcome_msg: "",
     bot_contact_admin: "",
@@ -142,6 +143,24 @@ export default function AdminDashboard() {
       return () => clearInterval(interval);
     }
   }, [token]);
+
+  // Action: Send Notification to Group
+  const handleNotifyGroup = async (productId) => {
+    try {
+      const res = await fetch(API_BASE + `/api/admin/products/${productId}/notify`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(data.message || "Notifikasi berhasil dikirim!", "success");
+      } else {
+        showToast(data.detail || "Gagal mengirim notifikasi.", "error");
+      }
+    } catch (err) {
+      showToast("Gagal menghubungi server.", "error");
+    }
+  };
 
   // Broadcast: Send Message
   const handleSendBroadcast = async (e) => {
@@ -933,10 +952,21 @@ export default function AdminDashboard() {
                   type="text"
                   className="form-input"
                   placeholder="Masukkan Token Bot Telegram"
-                  value={settingsForm.telegram_bot_token}
+                  value={settingsForm.telegram_bot_token || ""}
                   onChange={(e) => setSettingsForm({ ...settingsForm, telegram_bot_token: e.target.value })}
                 />
                 <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Token didapatkan dari @BotFather di Telegram</span>
+              </div>
+              <div className="form-group">
+                <label className="form-label">ID Channel / Grup Telegram</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Contoh: @NextAcc_channel atau -100123456789"
+                  value={settingsForm.telegram_channel_id || ""}
+                  onChange={(e) => setSettingsForm({ ...settingsForm, telegram_channel_id: e.target.value })}
+                />
+                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Masukkan Username Channel atau ID Grup yang akan menerima notifikasi stok</span>
               </div>
               <div className="form-group">
                 <label className="form-label">Status Aktif Bot</label>
@@ -1227,10 +1257,14 @@ export default function AdminDashboard() {
                     />
                     <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Bot akan mengirimkan satu baris data ini ke pembeli saat pembayaran sukses.</span>
                   </div>
-                  <button type="submit" className="btn btn-primary btn-sm" style={{ float: "right" }}>
-                    <Plus size={12} /> Impor Stok
-                  </button>
-                  <div style={{ clear: "both" }} />
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleNotifyGroup(selectedProduct.id)}>
+                      📢 Kirim Notifikasi ke Grup
+                    </button>
+                    <button type="submit" className="btn btn-primary btn-sm">
+                      <Plus size={12} /> Impor Stok
+                    </button>
+                  </div>
                 </form>
 
                 {/* Stock lists table */}

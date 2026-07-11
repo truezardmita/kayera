@@ -190,6 +190,7 @@ class StockReq(BaseModel):
 
 class SettingsReq(BaseModel):
     telegram_bot_token: str
+    telegram_channel_id: str
     pakasir_slug: str
     pakasir_api_key: str
     admin_username: str
@@ -455,6 +456,40 @@ async def send_broadcast(req: BroadcastReq, db: Session = Depends(get_db), curre
         "message": f"Broadcast dijadwalkan untuk dikirim ke {len(users)} pengguna di background."
 
     }
+
+@app.post("/api/admin/products/{product_id}/notify")
+async def notify_group(product_id: int, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+    if not bot_app:
+        raise HTTPException(status_code=400, detail="Bot Telegram belum aktif.")
+    
+    channel_id = database_crud.get_setting(db, "telegram_channel_id")
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="ID Channel/Grup Telegram belum diatur di menu Pengaturan.")
+        
+    product = database_crud.get_product_by_id(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Produk tidak ditemukan.")
+        
+    stock_count = database_crud.get_available_stock_count(db, product_id)
+    bot_username = bot_app.bot.username if bot_app.bot.username else "Bot"
+    
+    msg = (
+        f"🆕 *Stok Baru Tersedia!*\n"
+        f"Akun {product.name} (total tersedia: {stock_count}).\n\n"
+        f"Chat @{bot_username} lalu ketik /produk untuk membeli. 🛍️"
+    )
+    
+    try:
+        await bot_app.bot.send_message(
+            chat_id=channel_id,
+            text=msg,
+            parse_mode="Markdown"
+        )
+        return {"success": True, "message": "Notifikasi berhasil dikirim ke grup/channel!"}
+    except Exception as e:
+        logger.error(f"Failed to notify group {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Gagal mengirim pesan: {str(e)}")
+
 
 # Transactions Management
 @app.get("/api/admin/transactions")
