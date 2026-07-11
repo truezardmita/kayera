@@ -122,6 +122,11 @@ async def produk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Handler: Beli Produk (Browse Categories)
 async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ["group", "supergroup"]:
+        bot_username = context.bot.username
+        await update.message.reply_text(f"Menu ini hanya bisa diakses via Private Message (Japri). Silakan chat @{bot_username}.")
+        return
+        
     register_user_interaction(update.effective_user)
     db = SessionLocal()
     try:
@@ -148,6 +153,11 @@ async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # Handler: Riwayat Transaksi
 async def handle_riwayat_transaksi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ["group", "supergroup"]:
+        bot_username = context.bot.username
+        await update.message.reply_text(f"Menu ini hanya bisa diakses via Private Message (Japri). Silakan chat @{bot_username}.")
+        return
+        
     register_user_interaction(update.effective_user)
     user_id = update.effective_user.id
     db = SessionLocal()
@@ -185,6 +195,11 @@ async def handle_riwayat_transaksi(update: Update, context: ContextTypes.DEFAULT
 
 # Handler: Informasi Bot
 async def handle_informasi_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ["group", "supergroup"]:
+        bot_username = context.bot.username
+        await update.message.reply_text(f"Menu ini hanya bisa diakses via Private Message (Japri). Silakan chat @{bot_username}.")
+        return
+        
     register_user_interaction(update.effective_user)
     info_text = (
         "🤖 *StoreKeyra Bot*\n\n"
@@ -196,6 +211,11 @@ async def handle_informasi_bot(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Handler: Hubungi Admin
 async def handle_hubungi_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ["group", "supergroup"]:
+        bot_username = context.bot.username
+        await update.message.reply_text(f"Menu ini hanya bisa diakses via Private Message (Japri). Silakan chat @{bot_username}.")
+        return
+        
     register_user_interaction(update.effective_user)
     admin_contact = get_db_setting("bot_contact_admin", "@KeyraAdmin")
     safe_contact = clean_md(admin_contact)
@@ -247,6 +267,11 @@ def format_category_products_message(db, cat, products) -> tuple[str, InlineKeyb
 
 # Handle Callback Queries (Inline Keyboards)
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ["group", "supergroup"]:
+        bot_username = context.bot.username
+        await update.callback_query.answer(f"Pemesanan hanya bisa di Private Message @{bot_username}", show_alert=True)
+        return
+
     try:
         register_user_interaction(update.effective_user)
     except Exception:
@@ -707,6 +732,9 @@ def generate_qr_code(qr_string: str) -> io.BytesIO:
 
 # Handle manual quantity input (user types a number after clicking "Ketik Jumlah Sendiri")
 async def handle_manual_qty_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ["group", "supergroup"]:
+        return # Ignore random text in groups
+        
     prod_id = context.user_data.get("waiting_qty_prod_id")
     if not prod_id:
         # Not waiting for qty input, ignore
