@@ -481,11 +481,20 @@ async def notify_group(product_id: int, db: Session = Depends(get_db), current_u
     )
     
     try:
-        await bot_app.bot.send_message(
-            chat_id=channel_id,
-            text=msg,
-            parse_mode="HTML"
-        )
+        topic_id = database_crud.get_setting(db, "telegram_topic_id")
+        
+        send_kwargs = {
+            "chat_id": channel_id,
+            "text": msg,
+            "parse_mode": "HTML"
+        }
+        if topic_id:
+            try:
+                send_kwargs["message_thread_id"] = int(topic_id)
+            except ValueError:
+                pass
+                
+        await bot_app.bot.send_message(**send_kwargs)
         
         # Also broadcast to all bot users
         users = database_crud.get_telegram_users(db)

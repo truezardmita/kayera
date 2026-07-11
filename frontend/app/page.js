@@ -998,6 +998,17 @@ export default function AdminDashboard() {
                 <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Masukkan Username Channel atau ID Grup yang akan menerima notifikasi stok</span>
               </div>
               <div className="form-group">
+                <label className="form-label">ID Topic (Opsional untuk Supergroup Forum)</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Contoh: 12345"
+                  value={settingsForm.telegram_topic_id || ""}
+                  onChange={(e) => setSettingsForm({ ...settingsForm, telegram_topic_id: e.target.value })}
+                />
+                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Hanya isi jika Anda ingin notifikasi masuk ke sebuah Topik tertentu di dalam Grup</span>
+              </div>
+              <div className="form-group">
                 <label className="form-label">Status Aktif Bot</label>
                 <select
                   className="form-select"

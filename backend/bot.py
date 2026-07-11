@@ -81,7 +81,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     chat_type = update.effective_chat.type
-    await update.message.reply_text(f"🆔 ID {chat_type.capitalize()} ini adalah: `{chat_id}`", parse_mode="Markdown")
+    msg = f"🆔 ID {chat_type.capitalize()} ini adalah: `{chat_id}`"
+    
+    if update.message and update.message.is_topic_message:
+        topic_id = update.message.message_thread_id
+        msg += f"\n🔖 ID Topic (Thread ID): `{topic_id}`"
+        
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 # Handler: Beli Produk (Browse Categories)
