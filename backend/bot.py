@@ -77,6 +77,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
+# Command: /id (To get Group/Channel ID)
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+    await update.message.reply_text(f"🆔 ID {chat_type.capitalize()} ini adalah: `{chat_id}`", parse_mode="Markdown")
+
+
 # Handler: Beli Produk (Browse Categories)
 async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_user_interaction(update.effective_user)
@@ -742,6 +749,7 @@ def create_bot_app(token: str) -> Application:
     
     # Handlers — order matters: specific text filters first, catch-all last
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("id", id_command))
     application.add_handler(MessageHandler(filters.Text("🛍️ Beli Produk"), handle_beli_produk))
     application.add_handler(MessageHandler(filters.Text("🧾 Riwayat Transaksi"), handle_riwayat_transaksi))
     application.add_handler(MessageHandler(filters.Text("ℹ️ Informasi Bot"), handle_informasi_bot))
