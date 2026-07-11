@@ -96,7 +96,7 @@ export default function AdminDashboard() {
   }, []);
 
   // Fetching data
-  const fetchData = async () => {
+  const fetchData = async (isPoll = false) => {
     if (!token) return;
     try {
       const headers = { Authorization: `Bearer ${token}` };
@@ -124,7 +124,11 @@ export default function AdminDashboard() {
       const resSettings = await fetch(API_BASE + "/api/admin/settings", { headers });
       const dataSettings = await resSettings.json();
       setSettings(dataSettings);
-      setSettingsForm(dataSettings);
+      
+      // Prevent resetting the form while the user is typing during polls
+      if (!isPoll) {
+        setSettingsForm(dataSettings);
+      }
 
       // Transactions
       const resTxs = await fetch(API_BASE + "/api/admin/transactions", { headers });
@@ -133,15 +137,17 @@ export default function AdminDashboard() {
 
     } catch (err) {
       console.error("Error fetching admin dashboard data:", err);
-      showToast("Gagal memuat data dari server.", "error");
+      if (!isPoll) {
+        showToast("Gagal memuat data dari server.", "error");
+      }
     }
   };
 
   // Poll stats and transactions every 5 seconds for real-time sales feel
   useEffect(() => {
     if (token) {
-      fetchData();
-      const interval = setInterval(fetchData, 5000);
+      fetchData(false);
+      const interval = setInterval(() => fetchData(true), 5000);
       return () => clearInterval(interval);
     }
   }, [token]);
