@@ -204,7 +204,11 @@ def format_category_products_message(db, cat, products) -> tuple[str, InlineKeyb
 
 # Handle Callback Queries (Inline Keyboards)
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    register_user_interaction(update.effective_user)
+    try:
+        register_user_interaction(update.effective_user)
+    except Exception:
+        pass  # Don't let user registration failure block button interactions
+
     query = update.callback_query
     await query.answer()
 
@@ -434,7 +438,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         # Check Payment Status
         elif data.startswith("chk_"):
-            order_id = data.split("_")[1]
+            order_id = data.split("_", 1)[1]  # Use maxsplit=1 to safely handle any order_id format
             tx = database_crud.get_transaction_by_id(db, order_id)
             if not tx:
                 await query.answer("Transaksi tidak ditemukan.", show_alert=True)
@@ -493,7 +497,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         # Cancel Transaction
         elif data.startswith("cnl_"):
-            order_id = data.split("_")[1]
+            order_id = data.split("_", 1)[1]  # Use maxsplit=1 to safely handle any order_id format
             tx = database_crud.get_transaction_by_id(db, order_id)
             if not tx:
                 await query.answer("Transaksi tidak ditemukan.", show_alert=True)
