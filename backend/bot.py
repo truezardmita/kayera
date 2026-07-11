@@ -9,7 +9,8 @@ from telegram import (
     KeyboardButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaPhoto
+    InputMediaPhoto,
+    ReplyKeyboardRemove
 )
 from telegram.ext import (
     Application,
@@ -87,7 +88,10 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         topic_id = update.message.message_thread_id
         msg += f"\n🔖 ID Topic (Thread ID): `{topic_id}`"
         
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    if update.effective_chat.type in ["group", "supergroup"]:
+        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
+    else:
+        await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 # Command: /produk (Show all products and stock)
@@ -108,10 +112,10 @@ async def produk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         bot_username = context.bot.username
         
-        # If the command was used in a group/supergroup, add a button to go to private chat
+        # If the command was used in a group/supergroup, force remove keyboard
         if update.effective_chat.type in ["group", "supergroup"]:
             text += f"Silakan chat ke @{bot_username} untuk melakukan pembelian."
-            await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
         else:
             text += "Gunakan menu di bawah untuk mulai membeli."
             await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
