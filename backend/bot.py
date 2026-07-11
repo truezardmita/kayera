@@ -73,10 +73,11 @@ def register_user_interaction(user):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_user_interaction(update.effective_user)
     welcome_msg = get_db_setting("bot_welcome_msg", "Selamat datang di StoreKeyra Bot! 🛍️")
-    await update.message.reply_text(
-        welcome_msg,
-        reply_markup=get_main_keyboard()
-    )
+    
+    if update.effective_chat.type in ["group", "supergroup"]:
+        await update.message.reply_text(welcome_msg, reply_markup=ReplyKeyboardRemove())
+    else:
+        await update.message.reply_text(welcome_msg, reply_markup=get_main_keyboard())
 
 # Command: /id (To get Group/Channel ID)
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
