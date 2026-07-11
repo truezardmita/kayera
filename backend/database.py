@@ -86,9 +86,37 @@ class TelegramUser(Base):
     first_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+def run_migrations():
+    """
+    Run manual SQL migrations for schema changes that SQLAlchemy's create_all
+    won't apply automatically (e.g., changing column types on existing tables).
+    Only runs on PostgreSQL.
+    """
+    if not DATABASE_URL.startswith("postgresql"):
+        return  # SQLite handles big integers natively, no migration needed
+
+    migrations = [
+        # Fix: Telegram User IDs are 64-bit, must be BIGINT not INT
+        "ALTER TABLE telegram_users ALTER COLUMN id TYPE BIGINT",
+        "ALTER TABLE transactions ALTER COLUMN telegram_user_id TYPE BIGINT",
+    ]
+
+    with engine.connect() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(__import__('sqlalchemy').text(sql))
+                conn.commit()
+                print(f"Migration applied: {sql}")
+            except Exception as e:
+                # Column may already be BIGINT — safe to ignore
+                conn.rollback()
+                print(f"Migration skipped (already done or not needed): {e}")
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
-    
+    run_migrations()
+
     # Initialize default settings if not exists
     db = SessionLocal()
     try:
