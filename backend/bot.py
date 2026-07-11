@@ -365,8 +365,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             # Standard payment methods supported by Pakasir
             keyboard = [
                 [InlineKeyboardButton("📱 QRIS (All E-Wallet / Bank)", callback_data=f"pay_{p.id}_{qty}_qris")],
-                [InlineKeyboardButton("🏦 BNI VA", callback_data=f"pay_{p.id}_{qty}_bni_va"), InlineKeyboardButton("🏦 BRI VA", callback_data=f"pay_{p.id}_{qty}_bri_va")],
-                [InlineKeyboardButton("🏦 CIMB VA", callback_data=f"pay_{p.id}_{qty}_cimb_niaga_va"), InlineKeyboardButton("🏦 Permata VA", callback_data=f"pay_{p.id}_{qty}_permata_va")],
                 [InlineKeyboardButton("🔙 Batal", callback_data=f"prod_{p.id}")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
