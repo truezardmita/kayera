@@ -223,8 +223,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     db = SessionLocal()
     try:
         # Category selected: list products
-        if data.startswith("cat_"):
-            cat_id = int(data.split("_")[1])
+        if data.startswith("cat_") or data.startswith("menu_prods_"):
+            cat_id = int(data.split("_")[1]) if data.startswith("cat_") else int(data.split("_")[2])
             cat = database_crud.get_category_by_id(db, cat_id)
             products = database_crud.get_products(db, category_id=cat_id, active_only=True)
             
