@@ -90,6 +90,38 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+# Command: /produk (Show all products and stock)
+async def produk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = SessionLocal()
+    try:
+        products = database_crud.get_products(db, active_only=True)
+        if not products:
+            await update.message.reply_text("Maaf, belum ada produk aktif saat ini.")
+            return
+
+        text = "📦 *DAFTAR PRODUK & STOK*\n\n"
+        for p in products:
+            stock = database_crud.get_available_stock_count(db, p.id)
+            text += f"▪️ *{p.name}*\n"
+            text += f"   📦 Tersedia: `{stock}`\n"
+            text += f"   💰 Harga: `Rp {p.price:,.0f}`\n\n"
+            
+        bot_username = context.bot.username
+        
+        # If the command was used in a group/supergroup, add a button to go to private chat
+        if update.effective_chat.type in ["group", "supergroup"]:
+            text += "Silakan klik tombol di bawah ini untuk chat dengan Bot dan melakukan pembelian."
+            keyboard = [[InlineKeyboardButton("Beli Sekarang 🛍️", url=f"https://t.me/{bot_username}")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+        else:
+            text += "Gunakan menu di bawah untuk mulai membeli."
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
+            
+    finally:
+        db.close()
+
+
 # Handler: Beli Produk (Browse Categories)
 async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_user_interaction(update.effective_user)
@@ -827,6 +859,7 @@ def create_bot_app(token: str) -> Application:
     # Handlers — order matters: specific text filters first, catch-all last
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("id", id_command))
+    application.add_handler(CommandHandler("produk", produk_command))
     application.add_handler(MessageHandler(filters.Text("🛍️ Beli Produk"), handle_beli_produk))
     application.add_handler(MessageHandler(filters.Text("🧾 Riwayat Transaksi"), handle_riwayat_transaksi))
     application.add_handler(MessageHandler(filters.Text("ℹ️ Informasi Bot"), handle_informasi_bot))
