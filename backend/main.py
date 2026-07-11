@@ -176,6 +176,7 @@ class SettingsReq(BaseModel):
     bot_welcome_msg: str
     bot_contact_admin: str
     bot_active: str
+    bot_product_note: str
 
 class BroadcastReq(BaseModel):
     message: str

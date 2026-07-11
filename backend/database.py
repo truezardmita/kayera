@@ -100,7 +100,8 @@ def init_db():
             "admin_password": os.getenv("ADMIN_PASSWORD", "admin123"), # Simple login password
             "bot_welcome_msg": "Selamat datang di StoreKeyra Bot! 🛍️\nSilakan pilih menu di bawah ini untuk memulai belanja produk digital premium, token, dan lainnya.",
             "bot_contact_admin": "@KeyraAdmin",
-            "bot_active": "true"
+            "bot_active": "true",
+            "bot_product_note": "⚠️ *PENTING SEBELUM BELI!* ⚠️\nSemua akun dipastikan aktif saat dibeli. Garansi klaim hanya berlaku 10 menit sejak transaksi (hubungi admin jika ada kendala). Lewat 10 menit, komplain tidak diterima. TIDAK ADA GARANSI PEMAKAIAN — harap beli seperlunya dan langsung digunakan. Membeli berarti setuju & paham konsekuensinya."
         }
         for key, value in defaults.items():
             setting = db.query(Setting).filter(Setting.key == key).first()

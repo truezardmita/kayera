@@ -68,6 +68,7 @@ export default function AdminDashboard() {
     pakasir_api_key: "",
     admin_username: "",
     admin_password: "",
+    bot_product_note: "",
   });
 
   // UI state
@@ -965,6 +966,16 @@ export default function AdminDashboard() {
                   value={settingsForm.bot_welcome_msg}
                   onChange={(e) => setSettingsForm({ ...settingsForm, bot_welcome_msg: e.target.value })}
                 />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Note Daftar Produk</label>
+                <textarea
+                  className="form-textarea"
+                  style={{ minHeight: "120px" }}
+                  value={settingsForm.bot_product_note || ""}
+                  onChange={(e) => setSettingsForm({ ...settingsForm, bot_product_note: e.target.value })}
+                />
+                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Catatan penting yang akan ditampilkan di bawah daftar produk</span>
               </div>
             </div>
 

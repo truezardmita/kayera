@@ -163,6 +163,45 @@ async def handle_hubungi_admin(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
+# Helper to format the category's product list message
+def format_category_products_message(db, cat, products) -> tuple[str, InlineKeyboardMarkup]:
+    note = get_db_setting(
+        "bot_product_note",
+        "⚠️ *PENTING SEBELUM BELI!* ⚠️\nSemua akun dipastikan aktif saat dibeli. Garansi klaim hanya berlaku 10 menit sejak transaksi (hubungi admin jika ada kendala). Lewat 10 menit, komplain tidak diterima. TIDAK ADA GARANSI PEMAKAIAN — harap beli seperlunya dan langsung digunakan. Membeli berarti setuju & paham konsekuensinya."
+    )
+    
+    text = "🛍️ *Daftar Produk*\n\n"
+    keyboard = []
+    
+    for p in products:
+        stock_count = database_crud.get_available_stock_count(db, p.id)
+        
+        # Formatting price Indonesian style (e.g. Rp 700 or Rp 1.500)
+        price_val = f"{p.price:,.0f}".replace(",", ".")
+        price_str = f"Rp{price_val}"
+        
+        # Parse description for list suffix and extra info
+        desc_suffix = ""
+        extra_info = ""
+        if p.description:
+            # Check if there is a pipe separator to divide suffix and extra info
+            parts = [d.strip() for d in p.description.split("|")]
+            if len(parts) >= 2:
+                desc_suffix = " " + parts[0]
+                extra_info = f" · {parts[1]}"
+            elif "\n" not in p.description:
+                # If it's a short single line description
+                desc_suffix = " " + p.description
+        
+        text += f"• *{clean_md(p.name)}* — {price_str}{clean_md(desc_suffix)} ({stock_count} tersedia{clean_md(extra_info)})\n"
+        
+        keyboard.append([InlineKeyboardButton(f"🛒 {p.name} — {price_str}", callback_data=f"prod_{p.id}")])
+        
+    text += f"\n{note}\n\nTekan tombol di bawah untuk membeli."
+    keyboard.append([InlineKeyboardButton("🔙 Kembali", callback_data="menu_cats")])
+    
+    return text, InlineKeyboardMarkup(keyboard)
+
 # Handle Callback Queries (Inline Keyboards)
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_user_interaction(update.effective_user)
@@ -186,15 +225,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 )
                 return
 
-            keyboard = []
-            for p in products:
-                stock_count = database_crud.get_available_stock_count(db, p.id)
-                keyboard.append([InlineKeyboardButton(f"📦 {p.name} - Rp {p.price:,.0f} (Stok: {stock_count})", callback_data=f"prod_{p.id}")])
-            keyboard.append([InlineKeyboardButton("🔙 Kembali", callback_data="menu_cats")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            text, reply_markup = format_category_products_message(db, cat, products)
             await query.edit_message_text(
-                f"Kategori: *{clean_md(cat.name)}*\nPilih produk yang ingin kamu beli:",
+                text,
                 parse_mode="Markdown",
                 reply_markup=reply_markup
             )
@@ -244,15 +277,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             cat = database_crud.get_category_by_id(db, cat_id)
             products = database_crud.get_products(db, category_id=cat_id, active_only=True)
             
-            keyboard = []
-            for p in products:
-                stock_count = database_crud.get_available_stock_count(db, p.id)
-                keyboard.append([InlineKeyboardButton(f"📦 {p.name} - Rp {p.price:,.0f} (Stok: {stock_count})", callback_data=f"prod_{p.id}")])
-            keyboard.append([InlineKeyboardButton("🔙 Kembali", callback_data="menu_cats")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            text, reply_markup = format_category_products_message(db, cat, products)
             await query.edit_message_text(
-                f"Kategori: *{clean_md(cat.name)}*\nPilih produk yang ingin kamu beli:",
+                text,
                 parse_mode="Markdown",
                 reply_markup=reply_markup
             )
@@ -332,18 +359,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 api_key=pakasir_api_key
             )
 
-            if "error" in res:
+            if "error" in res or not res.get("payment"):
                 # Cancel the transaction in our database since API call failed
                 database_crud.cancel_transaction(db, tx.order_id)
+                error_detail = res.get("error") or res.get("message") or "Response format invalid from Payment Gateway"
                 await query.edit_message_text(
-                    f"❌ Gagal memproses transaksi ke Payment Gateway:\n`{res['error']}`",
-                    parse_mode="Markdown",
+                    f"❌ Gagal memproses transaksi ke Payment Gateway:\n{error_detail}",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Kembali", callback_data=f"prod_{p.id}")]])
                 )
                 return
 
             # Extract payment details
-            pay_data = res.get("payment", {})
+            pay_data = res.get("payment") or {}
             fee = pay_data.get("fee", 0)
             total_payment = pay_data.get("total_payment", p.price + fee)
             payment_number = pay_data.get("payment_number", "")
