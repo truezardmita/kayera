@@ -471,17 +471,12 @@ async def notify_group(product_id: int, db: Session = Depends(get_db), current_u
         raise HTTPException(status_code=404, detail="Produk tidak ditemukan.")
         
     stock_count = database_crud.get_available_stock_count(db, product_id)
-    def clean_md(val) -> str:
-        if val is None:
-            return ""
-        return str(val).replace("_", "\\_").replace("*", "\\*").replace("[", "\\[")
-
-    safe_product_name = clean_md(product.name)
     bot_username = bot_app.bot.username if bot_app.bot.username else "Bot"
     
+    # Using HTML parse mode is safer against unescaped underscores in product names or bot usernames
     msg = (
-        f"🆕 *Stok Baru Tersedia!*\n"
-        f"Akun {safe_product_name} (total tersedia: {stock_count}).\n\n"
+        f"🆕 <b>Stok Baru Tersedia!</b>\n"
+        f"Akun {product.name} (total tersedia: {stock_count}).\n\n"
         f"Chat @{bot_username} lalu ketik /produk untuk membeli. 🛍️"
     )
     
@@ -489,7 +484,7 @@ async def notify_group(product_id: int, db: Session = Depends(get_db), current_u
         await bot_app.bot.send_message(
             chat_id=channel_id,
             text=msg,
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
         return {"success": True, "message": "Notifikasi berhasil dikirim ke grup/channel!"}
     except Exception as e:
