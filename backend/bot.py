@@ -128,8 +128,6 @@ async def produk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handler: Beli Produk (Browse Categories)
 async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ["group", "supergroup"]:
-        bot_username = context.bot.username
-        await update.message.reply_text(f"Menu ini hanya bisa diakses via Private Message (Japri). Silakan chat @{bot_username}.")
         return
         
     register_user_interaction(update.effective_user)
@@ -159,8 +157,6 @@ async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # Handler: Riwayat Transaksi
 async def handle_riwayat_transaksi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ["group", "supergroup"]:
-        bot_username = context.bot.username
-        await update.message.reply_text(f"Menu ini hanya bisa diakses via Private Message (Japri). Silakan chat @{bot_username}.")
         return
         
     register_user_interaction(update.effective_user)
@@ -201,8 +197,6 @@ async def handle_riwayat_transaksi(update: Update, context: ContextTypes.DEFAULT
 # Handler: Informasi Bot
 async def handle_informasi_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ["group", "supergroup"]:
-        bot_username = context.bot.username
-        await update.message.reply_text(f"Menu ini hanya bisa diakses via Private Message (Japri). Silakan chat @{bot_username}.")
         return
         
     register_user_interaction(update.effective_user)
@@ -217,8 +211,6 @@ async def handle_informasi_bot(update: Update, context: ContextTypes.DEFAULT_TYP
 # Handler: Hubungi Admin
 async def handle_hubungi_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ["group", "supergroup"]:
-        bot_username = context.bot.username
-        await update.message.reply_text(f"Menu ini hanya bisa diakses via Private Message (Japri). Silakan chat @{bot_username}.")
         return
         
     register_user_interaction(update.effective_user)
