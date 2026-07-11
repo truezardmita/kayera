@@ -413,7 +413,7 @@ async def update_settings(req: SettingsReq, db: Session = Depends(get_db), curre
     return {"success": True, "message": "Settings updated, Bot restart scheduled if token changed."}
 
 # Broadcast Management
-async def run_broadcast(users, message: str):
+async def run_broadcast(users, message: str, parse_mode: str = "Markdown"):
     global bot_app
     if not bot_app:
         logger.error("Cannot run broadcast: Bot is not initialized or active.")
@@ -428,7 +428,7 @@ async def run_broadcast(users, message: str):
             await bot_app.bot.send_message(
                 chat_id=user.id,
                 text=message,
-                parse_mode="Markdown"
+                parse_mode=parse_mode
             )
             success_count += 1
             # Add delay to avoid hitting Telegram API limit (30 messages per second)
@@ -486,7 +486,14 @@ async def notify_group(product_id: int, db: Session = Depends(get_db), current_u
             text=msg,
             parse_mode="HTML"
         )
-        return {"success": True, "message": "Notifikasi berhasil dikirim ke grup/channel!"}
+        
+        # Also broadcast to all bot users
+        users = database_crud.get_telegram_users(db)
+        user_count = len(users) if users else 0
+        if users:
+            asyncio.create_task(run_broadcast(users, msg, parse_mode="HTML"))
+            
+        return {"success": True, "message": f"Notifikasi berhasil dikirim ke grup dan di-broadcast ke {user_count} pengguna!"}
     except Exception as e:
         logger.error(f"Failed to notify group {channel_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Gagal mengirim pesan: {str(e)}")
