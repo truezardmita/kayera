@@ -488,12 +488,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 # Generate QR code image
                 qr_bio = generate_qr_code(payment_number)
                 # Send QR Image along with detail text
-                await query.message.reply_photo(
+                sent_msg = await query.message.reply_photo(
                     photo=qr_bio,
                     caption=detail_text,
                     parse_mode="Markdown",
                     reply_markup=tx_markup
                 )
+                tx.invoice_msg_id = sent_msg.message_id
+                db.commit()
                 # Delete the loading message
                 await query.message.delete()
             else:
@@ -502,11 +504,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     f"🔢 *Nomor VA / Rekening:* `{payment_number}`\n\n"
                     "Dana akan langsung diverifikasi otomatis oleh sistem."
                 )
-                await query.edit_message_text(
+                sent_msg = await query.message.reply_text(
                     detail_text,
                     parse_mode="Markdown",
                     reply_markup=tx_markup
                 )
+                tx.invoice_msg_id = sent_msg.message_id
+                db.commit()
+                # Hapus pesan "sedang memproses..."
+                await query.message.delete()
 
         # Check Payment Status
         elif data.startswith("chk_"):
@@ -559,7 +565,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 completed_tx, item_content = database_crud.complete_transaction(db, tx.order_id)
                 if completed_tx.status == "completed":
                     val_content = item_content if item_content else "Hubungi admin untuk mendapatkan data manual (stok habis saat pembayaran)."
-                    await query.edit_message_text("✅ *Pembayaran terverifikasi!* Mengirimkan file data produk...", parse_mode="Markdown")
+                    
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
                     await send_product_as_file(
                         bot=query.get_bot(),
                         chat_id=query.from_user.id,
@@ -724,12 +734,20 @@ async def handle_manual_qty_input(update: Update, context: ContextTypes.DEFAULT_
 async def notify_user_payment_success(application: Application, order_id: str, item_content: str):
     db = SessionLocal()
     try:
-        tx = database_crud.get_transaction_by_id(db, order_id)
+        tx = db.query(database_crud.Transaction).filter(database_crud.Transaction.order_id == order_id).first()
         if not tx:
             return
 
         chat_id = tx.telegram_user_id
         product_name = tx.product.name if tx.product else "Produk"
+        
+        # Hapus pesan invoice pembayaran sebelumnya jika ada
+        if tx.invoice_msg_id:
+            try:
+                await application.bot.delete_message(chat_id=chat_id, message_id=tx.invoice_msg_id)
+            except Exception as del_err:
+                logger.error(f"Failed to delete invoice message for {order_id}: {del_err}")
+
         try:
             await send_product_as_file(
                 bot=application.bot,

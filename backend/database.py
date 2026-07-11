@@ -75,6 +75,7 @@ class Transaction(Base):
     status = Column(String, default="pending", index=True) # pending, completed, cancelled, expired
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
+    invoice_msg_id = Column(Integer, nullable=True)
 
     product = relationship("Product", back_populates="transactions")
     product_item = relationship("ProductItem", back_populates="transaction")
@@ -90,16 +91,18 @@ def run_migrations():
     """
     Run manual SQL migrations for schema changes that SQLAlchemy's create_all
     won't apply automatically (e.g., changing column types on existing tables).
-    Only runs on PostgreSQL.
     """
-    if not DATABASE_URL.startswith("postgresql"):
-        return  # SQLite handles big integers natively, no migration needed
-
-    migrations = [
-        # Fix: Telegram User IDs are 64-bit, must be BIGINT not INT
-        "ALTER TABLE telegram_users ALTER COLUMN id TYPE BIGINT",
-        "ALTER TABLE transactions ALTER COLUMN telegram_user_id TYPE BIGINT",
-    ]
+    migrations = []
+    if DATABASE_URL.startswith("postgresql"):
+        migrations.extend([
+            # Fix: Telegram User IDs are 64-bit, must be BIGINT not INT
+            "ALTER TABLE telegram_users ALTER COLUMN id TYPE BIGINT",
+            "ALTER TABLE transactions ALTER COLUMN telegram_user_id TYPE BIGINT",
+        ])
+        
+    migrations.extend([
+        "ALTER TABLE transactions ADD COLUMN invoice_msg_id INTEGER",
+    ])
 
     with engine.connect() as conn:
         for sql in migrations:
@@ -108,7 +111,7 @@ def run_migrations():
                 conn.commit()
                 print(f"Migration applied: {sql}")
             except Exception as e:
-                # Column may already be BIGINT — safe to ignore
+                # Column may already exist — safe to ignore
                 conn.rollback()
                 print(f"Migration skipped (already done or not needed): {e}")
 
