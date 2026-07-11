@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from datetime import datetime
-from backend.database import Category, Product, ProductItem, Transaction, Setting
+from backend.database import Category, Product, ProductItem, Transaction, Setting, TelegramUser
 import string
 import random
 
@@ -21,6 +21,21 @@ def set_setting(db: Session, key: str, value: str):
         db.add(setting)
     db.commit()
     return setting
+
+# TelegramUser helpers
+def save_telegram_user(db: Session, user_id: int, username: str, first_name: str):
+    user = db.query(TelegramUser).filter(TelegramUser.id == user_id).first()
+    if not user:
+        user = TelegramUser(id=user_id, username=username, first_name=first_name)
+        db.add(user)
+    else:
+        user.username = username
+        user.first_name = first_name
+    db.commit()
+    return user
+
+def get_telegram_users(db: Session):
+    return db.query(TelegramUser).all()
 
 # Category helpers
 def get_categories(db: Session):

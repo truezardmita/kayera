@@ -79,6 +79,13 @@ class Transaction(Base):
     product = relationship("Product", back_populates="transactions")
     product_item = relationship("ProductItem", back_populates="transaction")
 
+class TelegramUser(Base):
+    __tablename__ = "telegram_users"
+    id = Column(Integer, primary_key=True, index=True) # Telegram User ID
+    username = Column(String, nullable=True)
+    first_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     

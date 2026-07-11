@@ -177,6 +177,9 @@ class SettingsReq(BaseModel):
     bot_contact_admin: str
     bot_active: str
 
+class BroadcastReq(BaseModel):
+    message: str
+
 # ----------------- ADMIN API ENDPOINTS -----------------
 
 @app.post("/api/admin/login")
@@ -385,6 +388,50 @@ async def update_settings(req: SettingsReq, db: Session = Depends(get_db), curre
         asyncio.create_task(restart_bot_application(req.telegram_bot_token, is_active))
         
     return {"success": True, "message": "Settings updated, Bot restart scheduled if token changed."}
+
+# Broadcast Management
+async def run_broadcast(users, message: str):
+    global bot_app
+    if not bot_app:
+        logger.error("Cannot run broadcast: Bot is not initialized or active.")
+        return
+
+    logger.info(f"Starting broadcast to {len(users)} users.")
+    success_count = 0
+    fail_count = 0
+
+    for user in users:
+        try:
+            await bot_app.bot.send_message(
+                chat_id=user.id,
+                text=message,
+                parse_mode="Markdown"
+            )
+            success_count += 1
+            # Add delay to avoid hitting Telegram API limit (30 messages per second)
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.error(f"Failed to send broadcast to user {user.id}: {e}")
+            fail_count += 1
+
+    logger.info(f"Broadcast completed. Success: {success_count}, Failed: {fail_count}")
+
+@app.post("/api/admin/broadcast")
+def send_broadcast(req: BroadcastReq, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+    if not bot_app:
+        raise HTTPException(status_code=400, detail="Bot Telegram saat ini tidak aktif atau belum dikonfigurasi.")
+    
+    users = database_crud.get_telegram_users(db)
+    if not users:
+        return {"success": True, "message": "Tidak ada pengguna bot terdaftar untuk dikirimi broadcast."}
+    
+    # Run the broadcast process in background to prevent API gateway timeouts
+    asyncio.create_task(run_broadcast(users, req.message))
+    
+    return {
+        "success": True, 
+        "message": f"Broadcast dijadwalkan untuk dikirim ke {len(users)} pengguna di background."
+    }
 
 # Transactions Management
 @app.get("/api/admin/transactions")

@@ -51,8 +51,26 @@ def get_db_setting(key: str, default: str = "") -> str:
     finally:
         db.close()
 
+# Register Telegram User
+def register_user_interaction(user):
+    if not user:
+        return
+    db = SessionLocal()
+    try:
+        database_crud.save_telegram_user(
+            db=db,
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name
+        )
+    except Exception as e:
+        logger.error(f"Error registering user: {e}")
+    finally:
+        db.close()
+
 # Command: /start
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_user_interaction(update.effective_user)
     welcome_msg = get_db_setting("bot_welcome_msg", "Selamat datang di StoreKeyra Bot! 🛍️")
     await update.message.reply_text(
         welcome_msg,
@@ -61,6 +79,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Handler: Beli Produk (Browse Categories)
 async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_user_interaction(update.effective_user)
     db = SessionLocal()
     try:
         categories = database_crud.get_categories(db)
@@ -86,6 +105,7 @@ async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # Handler: Riwayat Transaksi
 async def handle_riwayat_transaksi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_user_interaction(update.effective_user)
     user_id = update.effective_user.id
     db = SessionLocal()
     try:
@@ -122,17 +142,18 @@ async def handle_riwayat_transaksi(update: Update, context: ContextTypes.DEFAULT
 
 # Handler: Informasi Bot
 async def handle_informasi_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_user_interaction(update.effective_user)
     info_text = (
         "🤖 *StoreKeyra Bot*\n\n"
         "Bot ini menyediakan berbagai macam Akun Premium, Token Akses, dan produk digital lainnya secara otomatis.\n\n"
         "⚡ Pembayaran instan menggunakan QRIS dan Virtual Account didukung oleh *Pakasir.com*.\n"
         "⚡ Produk akan langsung dikirim oleh bot setelah pembayaran terverifikasi!\n\n"
-        "⚙️ *Created by:* t.me/ThunderBotXX"
     )
     await update.message.reply_text(info_text, parse_mode="Markdown")
 
 # Handler: Hubungi Admin
 async def handle_hubungi_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_user_interaction(update.effective_user)
     admin_contact = get_db_setting("bot_contact_admin", "@KeyraAdmin")
     safe_contact = clean_md(admin_contact)
     safe_contact = clean_md(admin_contact)
@@ -144,6 +165,7 @@ async def handle_hubungi_admin(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Handle Callback Queries (Inline Keyboards)
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_user_interaction(update.effective_user)
     query = update.callback_query
     await query.answer()
 

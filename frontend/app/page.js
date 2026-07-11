@@ -17,7 +17,8 @@ import {
   Menu,
   ShieldCheck,
   CreditCard,
-  Bot
+  Bot,
+  Megaphone
 } from "lucide-react";
 
 const API_BASE = typeof window !== "undefined" && window.location.port === "3000"
@@ -32,7 +33,8 @@ export default function AdminDashboard() {
   const [passwordInput, setPasswordInput] = useState("");
 
   // Navigation
-  const [activeTab, setActiveTab] = useState("home"); // home, categories, products, settings, transactions
+  const [activeTab, setActiveTab] = useState("home"); // home, categories, products, settings, transactions, broadcast
+  const [broadcastMessage, setBroadcastMessage] = useState("");
 
   // Data states
   const [stats, setStats] = useState(null);
@@ -139,6 +141,40 @@ export default function AdminDashboard() {
       return () => clearInterval(interval);
     }
   }, [token]);
+
+  // Broadcast: Send Message
+  const handleSendBroadcast = async (e) => {
+    e.preventDefault();
+    if (!broadcastMessage.trim()) {
+      showToast("Pesan broadcast tidak boleh kosong.", "error");
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      const res = await fetch(API_BASE + "/api/admin/broadcast", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ message: broadcastMessage })
+      });
+      
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(data.message || "Broadcast berhasil dikirim!", "success");
+        setBroadcastMessage("");
+      } else {
+        showToast(data.detail || "Gagal mengirim broadcast.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Koneksi gagal saat mengirim broadcast.", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Auth: Login
   const handleLogin = async (e) => {
@@ -500,6 +536,9 @@ export default function AdminDashboard() {
           <li className={`nav-item ${activeTab === "settings" ? "active" : ""}`} onClick={() => { setActiveTab("settings"); setMobileMenuOpen(false); }}>
             <Settings size={18} className="nav-icon" /> Settings / Token
           </li>
+          <li className={`nav-item ${activeTab === "broadcast" ? "active" : ""}`} onClick={() => { setActiveTab("broadcast"); setMobileMenuOpen(false); }}>
+            <Megaphone size={18} className="nav-icon" /> Kirim Broadcast
+          </li>
         </ul>
         <div className="sidebar-footer">
           <button className="logout-btn" onClick={handleLogout} style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
@@ -521,6 +560,7 @@ export default function AdminDashboard() {
               {activeTab === "products" && "Manajemen Produk & Stok"}
               {activeTab === "transactions" && "Riwayat Transaksi Pelanggan"}
               {activeTab === "settings" && "Konfigurasi Bot & Payment Gateway"}
+              {activeTab === "broadcast" && "Broadcast Pengumuman"}
             </h1>
             <p className="page-subtitle">
               {activeTab === "home" && "Ringkasan performa penjualan dan transaksi terbaru."}
@@ -528,6 +568,7 @@ export default function AdminDashboard() {
               {activeTab === "products" && "Kelola produk digital, harga, dan input token/akun digital."}
               {activeTab === "transactions" && "Daftar invoice, status pembayaran, dan link simulation."}
               {activeTab === "settings" && "Atur token Telegram Bot, credentials Pakasir, dan kredensial admin."}
+              {activeTab === "broadcast" && "Kirim pesan broadcast massal ke seluruh pengguna Telegram Bot."}
             </p>
           </div>
           {activeTab === "categories" && (
@@ -982,6 +1023,45 @@ export default function AdminDashboard() {
               </button>
             </div>
           </form>
+        )}
+
+        {/* Tab content: Broadcast */}
+        {activeTab === "broadcast" && (
+          <div className="settings-card" style={{ maxWidth: "800px", margin: "0 auto" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "20px", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "10px" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}><Megaphone size={18} /> Kirim Pesan Broadcast</span>
+            </h3>
+            
+            <form onSubmit={handleSendBroadcast} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+              <div className="form-group">
+                <label className="form-label" style={{ marginBottom: "8px", display: "block" }}>Isi Pesan Broadcast</label>
+                <textarea
+                  className="form-textarea"
+                  style={{ minHeight: "250px", fontFamily: "monospace", fontSize: "14px" }}
+                  placeholder="Ketik pesan Anda di sini... (Mendukung format Markdown seperti *teks tebal*, _miring_, `code`, [link](http://example.com))"
+                  value={broadcastMessage}
+                  onChange={(e) => setBroadcastMessage(e.target.value)}
+                  disabled={loading}
+                  required
+                />
+                <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-muted)", lineHeight: "1.5" }}>
+                  💡 <strong>Catatan format Markdown:</strong><br />
+                  - Ketik <code>*Teks Tebal*</code> untuk teks tebal.<br />
+                  - Ketik <code>_Teks Miring_</code> untuk teks miring.<br />
+                  - Pastikan semua tag markdown lengkap (punya pasangan penutup) agar bot tidak gagal parsing.
+                </div>
+              </div>
+              
+              <button 
+                type="submit" 
+                className="btn btn-primary" 
+                style={{ alignSelf: "flex-end", display: "flex", alignItems: "center", gap: "8px" }}
+                disabled={loading}
+              >
+                {loading ? "⏳ Sedang Mengirim..." : <>📢 Kirim Pengumuman</>}
+              </button>
+            </form>
+          </div>
         )}
       </main>
 
