@@ -191,6 +191,7 @@ class StockReq(BaseModel):
 class SettingsReq(BaseModel):
     telegram_bot_token: str
     telegram_channel_id: str
+    telegram_topic_id: Optional[str] = ""
     pakasir_slug: str
     pakasir_api_key: str
     admin_username: str
