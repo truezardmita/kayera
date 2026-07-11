@@ -107,11 +107,11 @@ async def produk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "📦 *DAFTAR PRODUK & STOK*\n\n"
         for p in products:
             stock = database_crud.get_available_stock_count(db, p.id)
-            text += f"▪️ *{p.name}*\n"
+            text += f"▪️ *{clean_md(p.name)}*\n"
             text += f"   📦 Tersedia: `{stock}`\n"
             text += f"   💰 Harga: `Rp {p.price:,.0f}`\n\n"
             
-        bot_username = context.bot.username
+        bot_username = clean_md(context.bot.username)
         
         # If the command was used in a group/supergroup, force remove keyboard
         if update.effective_chat.type in ["group", "supergroup"]:
