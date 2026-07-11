@@ -113,7 +113,20 @@ def add_stock(db: Session, product_id: int, items: list[str]):
     return added_items
 
 def get_available_stock_count(db: Session, product_id: int) -> int:
-    return db.query(ProductItem).filter(ProductItem.product_id == product_id, ProductItem.is_sold == False).count()
+    unsold_count = db.query(ProductItem).filter(ProductItem.product_id == product_id, ProductItem.is_sold == False).count()
+    
+    # Calculate reserved stock from pending transactions
+    pending_txs = db.query(Transaction).filter(Transaction.product_id == product_id, Transaction.status == "pending").all()
+    
+    product = db.query(Product).filter(Product.id == product_id).first()
+    reserved_qty = 0
+    if product and product.price > 0:
+        for tx in pending_txs:
+            qty = max(1, round(tx.amount / product.price))
+            reserved_qty += qty
+            
+    available = unsold_count - reserved_qty
+    return available if available > 0 else 0
 
 def get_stock_items(db: Session, product_id: int):
     return db.query(ProductItem).filter(ProductItem.product_id == product_id).all()

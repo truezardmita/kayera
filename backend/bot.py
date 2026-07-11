@@ -511,6 +511,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 db.commit()
                 # Hapus pesan "sedang memproses..."
                 await query.message.delete()
+                
+            # Schedule payment timeout task (15 minutes)
+            asyncio.create_task(handle_payment_timeout(context.application, tx.order_id))
 
         # Check Payment Status
         elif data.startswith("chk_"):
@@ -724,6 +727,58 @@ async def handle_manual_qty_input(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         logger.error(f"Error handling manual qty input: {e}")
         await update.message.reply_text("❌ Terjadi kesalahan. Silakan coba lagi.")
+    finally:
+        db.close()
+
+
+# Payment timeout background task
+async def handle_payment_timeout(application: Application, order_id: str):
+    # Wait for 15 minutes
+    await asyncio.sleep(15 * 60)
+    
+    db = SessionLocal()
+    try:
+        tx = db.query(database_crud.Transaction).filter(database_crud.Transaction.order_id == order_id).first()
+        if not tx or tx.status != "pending":
+            return # Already handled (paid, cancelled, or not found)
+            
+        # Cancel the transaction in DB
+        tx.status = "cancelled"
+        db.commit()
+        
+        chat_id = tx.telegram_user_id
+        
+        # Cancel the transaction in Pakasir
+        pakasir_slug = database_crud.get_setting(db, "pakasir_slug")
+        pakasir_api_key = database_crud.get_setting(db, "pakasir_api_key")
+        if pakasir_slug and pakasir_api_key:
+            cancel_pakasir_transaction(
+                project=pakasir_slug,
+                order_id=tx.order_id,
+                amount=int(tx.amount),
+                api_key=pakasir_api_key
+            )
+        
+        # Delete the invoice message
+        if tx.invoice_msg_id:
+            try:
+                await application.bot.delete_message(chat_id=chat_id, message_id=tx.invoice_msg_id)
+            except Exception as e:
+                logger.error(f"Failed to delete expired invoice {order_id}: {e}")
+                
+        # Send timeout notification
+        cancel_msg = (
+            f"❌ *WAKTU PEMBAYARAN HABIS*\n\n"
+            f"Order ID: `{tx.order_id}`\n\n"
+            f"Mohon maaf, Anda tidak menyelesaikan pembayaran dalam waktu 15 menit. "
+            f"Pesanan Anda telah otomatis dibatalkan dan stok dilepas kembali.\n\n"
+            f"Silakan buat pesanan baru jika Anda masih berminat!"
+        )
+        try:
+            await application.bot.send_message(chat_id=chat_id, text=cancel_msg, parse_mode="Markdown")
+        except Exception:
+            pass
+            
     finally:
         db.close()
 
