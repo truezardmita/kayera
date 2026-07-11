@@ -518,32 +518,41 @@ def get_admin_transactions(db: Session = Depends(get_db), current_user: str = De
         "completed_at": t.completed_at.isoformat() if t.completed_at else None
     } for t in txs]
 
-# Simulates Pakasir Payment directly (helps admin simulate transactions manually)
-@app.post("/api/admin/transactions/{order_id}/simulate")
-def simulate_payment(order_id: str, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+# Manually confirm transaction
+@app.post("/api/admin/transactions/{order_id}/confirm")
+async def confirm_payment(order_id: str, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
     tx = database_crud.get_transaction_by_id(db, order_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
     if tx.status != "pending":
         raise HTTPException(status_code=400, detail="Transaksi sudah selesai / dibatalkan")
         
-    pakasir_slug = database_crud.get_setting(db, "pakasir_slug")
-    pakasir_api_key = database_crud.get_setting(db, "pakasir_api_key")
-    
-    if not pakasir_slug or not pakasir_api_key:
-        raise HTTPException(status_code=400, detail="Pakasir slug atau API key belum dikonfigurasi")
+    completed_tx, item_content = database_crud.complete_transaction(db, tx.order_id)
+    if completed_tx.status == "completed" and bot_app:
+        val_content = item_content if item_content else "Data pesanan manual. Hubungi admin."
+        asyncio.create_task(notify_user_payment_success(bot_app, tx.order_id, val_content))
         
-    res = simulate_pakasir_payment(
-        project=pakasir_slug,
-        order_id=tx.order_id,
-        amount=int(tx.amount),
-        api_key=pakasir_api_key
-    )
-    
-    if "error" in res:
-        raise HTTPException(status_code=400, detail=f"Gagal melakukan simulasi: {res['error']}")
+    return {"success": True, "message": "Transaksi berhasil dikonfirmasi secara manual."}
+
+# Manually cancel transaction
+@app.post("/api/admin/transactions/{order_id}/cancel")
+async def cancel_payment(order_id: str, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+    tx = database_crud.get_transaction_by_id(db, order_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
+    if tx.status != "pending":
+        raise HTTPException(status_code=400, detail="Transaksi sudah selesai / dibatalkan")
         
-    return {"success": True, "response": res}
+    database_crud.cancel_transaction(db, tx.order_id)
+    
+    if bot_app:
+        msg = f"❌ *TRANSAKSI DIBATALKAN*\n\nOrder ID: `{tx.order_id}`\nPesanan Anda telah dibatalkan oleh Admin."
+        try:
+            await bot_app.bot.send_message(chat_id=tx.telegram_user_id, text=msg, parse_mode="Markdown")
+        except:
+            pass
+
+    return {"success": True, "message": "Transaksi berhasil dibatalkan."}
 
 # ----------------- TELEGRAM WEBHOOK ENDPOINT -----------------
 

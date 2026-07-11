@@ -18,7 +18,9 @@ import {
   ShieldCheck,
   CreditCard,
   Bot,
-  Megaphone
+  Megaphone,
+  CheckCircle,
+  XCircle
 } from "lucide-react";
 
 const API_BASE = typeof window !== "undefined" && window.location.port === "3000"
@@ -449,20 +451,42 @@ export default function AdminDashboard() {
     }
   };
 
-  // Action: Simulate Transaction payment (Sandbox)
-  const handleSimulatePayment = async (orderId) => {
+  // Action: Manually Confirm Transaction
+  const handleConfirmPayment = async (orderId) => {
+    if (!confirm("Konfirmasi pesanan ini secara manual? Status akan menjadi Selesai dan stok produk akan dikirim.")) return;
     try {
-      showToast("Mengirim simulasi pembayaran...");
-      const res = await fetch(API_BASE + `/api/admin/transactions/${orderId}/simulate`, {
+      showToast("Mengkonfirmasi pembayaran...");
+      const res = await fetch(API_BASE + `/api/admin/transactions/${orderId}/confirm`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (res.status === 200 && data.success) {
-        showToast("Simulasi pembayaran berhasil! Transaksi selesai.");
+        showToast("Transaksi berhasil dikonfirmasi manual!");
         fetchData();
       } else {
-        showToast(data.detail || "Gagal melakukan simulasi.", "error");
+        showToast(data.detail || "Gagal mengkonfirmasi transaksi.", "error");
+      }
+    } catch (err) {
+      showToast("Error.", "error");
+    }
+  };
+
+  // Action: Manually Cancel Transaction
+  const handleCancelPayment = async (orderId) => {
+    if (!confirm("Batalkan pesanan ini secara manual? Status akan menjadi Dibatalkan.")) return;
+    try {
+      showToast("Membatalkan transaksi...");
+      const res = await fetch(API_BASE + `/api/admin/transactions/${orderId}/cancel`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.status === 200 && data.success) {
+        showToast("Transaksi berhasil dibatalkan manual.");
+        fetchData();
+      } else {
+        showToast(data.detail || "Gagal membatalkan transaksi.", "error");
       }
     } catch (err) {
       showToast("Error.", "error");
@@ -920,9 +944,14 @@ export default function AdminDashboard() {
                       </td>
                       <td>
                         {tx.status === "pending" && (
-                          <button className="btn btn-primary btn-sm" onClick={() => handleSimulatePayment(tx.order_id)}>
-                            <CreditCard size={12} /> Simulasi Bayar
-                          </button>
+                          <div style={{ display: "flex", gap: "6px" }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => handleConfirmPayment(tx.order_id)}>
+                              <CheckCircle size={12} /> Confirm
+                            </button>
+                            <button className="btn btn-sm" style={{ background: "rgba(239, 68, 68, 0.1)", color: "#ef4444", border: "1px solid rgba(239, 68, 68, 0.2)" }} onClick={() => handleCancelPayment(tx.order_id)}>
+                              <XCircle size={12} /> Cancel
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
