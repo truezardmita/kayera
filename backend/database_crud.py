@@ -162,25 +162,45 @@ def get_transactions(db: Session):
 def complete_transaction(db: Session, order_id: str) -> Transaction:
     tx = get_transaction_by_id(db, order_id)
     if tx and tx.status == "pending":
-        # Find one unsold item for the product
-        unsold_item = db.query(ProductItem).filter(ProductItem.product_id == tx.product_id, ProductItem.is_sold == False).first()
-        if unsold_item:
-            unsold_item.is_sold = True
-            unsold_item.sold_at = datetime.utcnow()
-            tx.product_item_id = unsold_item.id
+        # Derive qty from amount and product price
+        product = db.query(Product).filter(Product.id == tx.product_id).first()
+        if product and product.price > 0:
+            qty = max(1, round(tx.amount / product.price))
+        else:
+            qty = 1
+
+        # Find qty unsold items
+        unsold_items = (
+            db.query(ProductItem)
+            .filter(ProductItem.product_id == tx.product_id, ProductItem.is_sold == False)
+            .limit(qty)
+            .all()
+        )
+
+        if unsold_items:
+            for item in unsold_items:
+                item.is_sold = True
+                item.sold_at = datetime.utcnow()
+
+            # Link first item to transaction for record keeping
+            tx.product_item_id = unsold_items[0].id
             tx.status = "completed"
             tx.completed_at = datetime.utcnow()
             db.commit()
             db.refresh(tx)
-            return tx, unsold_item.content
+
+            # Return all items' content joined together
+            all_content = "\n".join(item.content for item in unsold_items)
+            return tx, all_content
         else:
-            # Paid but stock runs out! Mark completed but with empty product_item (requires admin intervention)
+            # Paid but stock runs out — mark completed without item
             tx.status = "completed"
             tx.completed_at = datetime.utcnow()
             db.commit()
             db.refresh(tx)
             return tx, None
     return tx, None
+
 
 def cancel_transaction(db: Session, order_id: str) -> Transaction:
     tx = get_transaction_by_id(db, order_id)

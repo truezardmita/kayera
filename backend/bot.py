@@ -256,13 +256,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             text = (
                 f"📦 *{clean_md(p.name)}*\n\n"
                 f"📝 *Deskripsi:*\n{clean_md(p.description) or '-'}\n\n"
-                f"💵 *Harga:* Rp {p.price:,.0f}\n"
+                f"💵 *Harga:* Rp {p.price:,.0f} / item\n"
                 f"📊 *Stok Tersedia:* {stock_count}\n"
             )
 
             keyboard = []
             if stock_count > 0:
-                keyboard.append([InlineKeyboardButton("💳 Beli Sekarang", callback_data=f"pay_{p.id}_qris")])
+                keyboard.append([InlineKeyboardButton("🛒 Beli Sekarang", callback_data=f"qty_{p.id}")])
             else:
                 keyboard.append([InlineKeyboardButton("🚫 Stok Habis", callback_data="stock_empty")])
             
@@ -275,8 +275,43 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data == "stock_empty":
             await query.answer("Maaf, stok untuk produk ini sedang kosong. Silakan hubungi admin.", show_alert=True)
 
-        # Back to products list in category
-        elif data.startswith("menu_prods_"):
+        # Quantity selection step
+        elif data.startswith("qty_"):
+            prod_id = int(data.split("_")[1])
+            p = database_crud.get_product_by_id(db, prod_id)
+            stock_count = database_crud.get_available_stock_count(db, p.id)
+
+            if stock_count <= 0:
+                await query.answer("Stok habis!", show_alert=True)
+                return
+
+            # Max qty is 10 or available stock, whichever is smaller
+            max_qty = min(stock_count, 10)
+
+            text = (
+                f"🛒 *Pilih Jumlah Pembelian*\n\n"
+                f"Produk: *{clean_md(p.name)}*\n"
+                f"Harga Satuan: Rp {p.price:,.0f}\n"
+                f"Stok Tersedia: {stock_count}\n\n"
+                f"Pilih berapa banyak yang ingin dibeli:"
+            )
+
+            # Build quantity buttons (up to 5 per row)
+            qty_buttons = []
+            row = []
+            for q in range(1, max_qty + 1):
+                total = p.price * q
+                total_str = f"{total:,.0f}".replace(",", ".")
+                row.append(InlineKeyboardButton(f"{q}x — Rp{total_str}", callback_data=f"buy_{p.id}_{q}"))
+                if len(row) == 2:  # 2 per row
+                    qty_buttons.append(row)
+                    row = []
+            if row:
+                qty_buttons.append(row)
+
+            qty_buttons.append([InlineKeyboardButton("🔙 Kembali", callback_data=f"prod_{p.id}")])
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(qty_buttons))
+
             cat_id = int(data.split("_")[2])
             cat = database_crud.get_category_by_id(db, cat_id)
             products = database_crud.get_products(db, category_id=cat_id, active_only=True)
@@ -290,26 +325,29 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         # Buy clicked: show payment methods
         elif data.startswith("buy_"):
-            prod_id = int(data.split("_")[1])
+            parts = data.split("_")
+            prod_id = int(parts[1])
+            qty = int(parts[2])
             p = database_crud.get_product_by_id(db, prod_id)
             stock_count = database_crud.get_available_stock_count(db, p.id)
             
-            if stock_count <= 0:
-                await query.answer("Stok habis!", show_alert=True)
+            if qty > stock_count:
+                await query.answer("Stok tidak mencukupi!", show_alert=True)
                 return
 
             text = (
                 f"🛒 *Metode Pembayaran*\n\n"
                 f"Produk: *{clean_md(p.name)}*\n"
-                f"Harga: Rp {p.price:,.0f}\n\n"
+                f"Jumlah: {qty}\n"
+                f"Total Harga: Rp {(p.price * qty):,.0f}\n\n"
                 "Silakan pilih metode pembayaran yang ingin digunakan:"
             )
 
             # Standard payment methods supported by Pakasir
             keyboard = [
-                [InlineKeyboardButton("📱 QRIS (All E-Wallet / Bank)", callback_data=f"pay_{p.id}_qris")],
-                [InlineKeyboardButton("🏦 BNI VA", callback_data=f"pay_{p.id}_bni_va"), InlineKeyboardButton("🏦 BRI VA", callback_data=f"pay_{p.id}_bri_va")],
-                [InlineKeyboardButton("🏦 CIMB VA", callback_data=f"pay_{p.id}_cimb_niaga_va"), InlineKeyboardButton("🏦 Permata VA", callback_data=f"pay_{p.id}_permata_va")],
+                [InlineKeyboardButton("📱 QRIS (All E-Wallet / Bank)", callback_data=f"pay_{p.id}_{qty}_qris")],
+                [InlineKeyboardButton("🏦 BNI VA", callback_data=f"pay_{p.id}_{qty}_bni_va"), InlineKeyboardButton("🏦 BRI VA", callback_data=f"pay_{p.id}_{qty}_bri_va")],
+                [InlineKeyboardButton("🏦 CIMB VA", callback_data=f"pay_{p.id}_{qty}_cimb_niaga_va"), InlineKeyboardButton("🏦 Permata VA", callback_data=f"pay_{p.id}_{qty}_permata_va")],
                 [InlineKeyboardButton("🔙 Batal", callback_data=f"prod_{p.id}")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -319,7 +357,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data.startswith("pay_"):
             parts = data.split("_")
             prod_id = int(parts[1])
-            method = "_".join(parts[2:]) # Handles method with multiple underscores like cimb_niaga_va
+            qty = int(parts[2])  # quantity is always the 3rd part
+            method = "_".join(parts[3:])  # method may contain underscores like cimb_niaga_va
 
             # Fetch credentials
             pakasir_slug = database_crud.get_setting(db, "pakasir_slug")
@@ -334,32 +373,44 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
             p = database_crud.get_product_by_id(db, prod_id)
             stock_count = database_crud.get_available_stock_count(db, p.id)
-            if stock_count <= 0:
-                await query.answer("Stok habis!", show_alert=True)
+            if qty > stock_count:
+                await query.answer(f"Stok hanya tersisa {stock_count}!", show_alert=True)
                 return
+
+            # Calculate totals based on qty
+            subtotal = p.price * qty
 
             # Initial message to show loading state
             await query.edit_message_text("⏳ Sedang memproses invoice pembayaran, mohon tunggu...")
 
             # Generate unique transaction order_id and record it
-            # To simulate exact fee, we create transaction in database first
             tx = database_crud.create_transaction(
                 db=db,
                 telegram_user_id=query.from_user.id,
                 telegram_username=query.from_user.username,
                 product_id=p.id,
-                amount=p.price,
+                amount=subtotal,
                 fee=0,
-                total_payment=p.price,
+                total_payment=subtotal,
                 payment_method=method
             )
+
+            # Store qty in telegram_username field as a note (workaround — store as JSON prefix)
+            # Better: we store qty in the order_id notes via DB quantity field if available
+            # For now store qty in a separate way by encoding in transaction
+            # We'll use product_item_id temporarily to store qty until payment completes
+            # Actually the cleanest is to just remember qty from callback at complete time
+            # We store qty as a note in a new DB field — but for now encode in order metadata
+            # Simple approach: store qty in the transaction's fee field temporarily (0 * qty trick)
+            # REAL solution: add quantity column — but migration needed. Use amount/price to derive.
+            # qty = round(tx.amount / p.price) can recover qty at completion time!
 
             # Call Pakasir API to generate invoice
             res = create_pakasir_transaction(
                 method=method,
                 project=pakasir_slug,
                 order_id=tx.order_id,
-                amount=int(p.price),
+                amount=int(subtotal),
                 api_key=pakasir_api_key
             )
 
@@ -397,8 +448,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 f"🧾 *INVOICE PEMBAYARAN*\n\n"
                 f"ID Order: `{tx.order_id}`\n"
                 f"Produk: *{clean_md(p.name)}*\n"
+                f"Jumlah: *{qty}x*\n"
                 f"Metode: *{method.upper()}*\n\n"
-                f"Harga: Rp {p.price:,.0f}\n"
+                f"Harga Satuan: Rp {p.price:,.0f}\n"
+                f"Subtotal: Rp {subtotal:,.0f}\n"
                 f"Biaya Admin: Rp {fee:,.0f}\n"
                 f"🏦 *Total Pembayaran:* `Rp {total_payment:,.0f}`\n"
                 f"⏳ *Batas Waktu:* {expired_formatted}\n\n"
