@@ -40,18 +40,30 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     init_db()
 
-    # Load bot token and start bot
+    # Load bot token and start bot in webhook mode
     db = SessionLocal()
     try:
         bot_token = database_crud.get_setting(db, "telegram_bot_token")
         bot_active = database_crud.get_setting(db, "bot_active") == "true"
         if bot_token and bot_active:
-            logger.info("Starting Telegram Bot...")
+            logger.info("Starting Telegram Bot (webhook mode)...")
             bot_app = create_bot_app(bot_token)
             await bot_app.initialize()
             await bot_app.start()
-            await bot_app.updater.start_polling()
-            logger.info("Telegram Bot started.")
+
+            # Register webhook URL with Telegram
+            webhook_url = os.getenv("WEBHOOK_URL", "").rstrip("/")
+            if webhook_url:
+                full_webhook = f"{webhook_url}/telegram/webhook"
+                await bot_app.bot.set_webhook(
+                    url=full_webhook,
+                    drop_pending_updates=True,  # Ignore stale updates from old instance
+                )
+                logger.info(f"Webhook registered: {full_webhook}")
+            else:
+                logger.warning("WEBHOOK_URL env variable not set. Webhook not registered.")
+
+            logger.info("Telegram Bot started (webhook mode).")
         else:
             logger.warning("Telegram Bot token is empty or bot is inactive. Bot will not start on boot.")
     except Exception as e:
@@ -65,7 +77,7 @@ async def lifespan(app: FastAPI):
     if bot_app:
         logger.info("Stopping Telegram Bot...")
         try:
-            await bot_app.updater.stop()
+            await bot_app.bot.delete_webhook(drop_pending_updates=True)
             await bot_app.stop()
             await bot_app.shutdown()
             logger.info("Telegram Bot stopped.")
@@ -127,7 +139,7 @@ async def restart_bot_application(token: str, active: bool = True):
     if bot_app:
         logger.info("Restarting: Stopping current Telegram Bot...")
         try:
-            await bot_app.updater.stop()
+            await bot_app.bot.delete_webhook(drop_pending_updates=True)
             await bot_app.stop()
             await bot_app.shutdown()
         except Exception as e:
@@ -135,13 +147,22 @@ async def restart_bot_application(token: str, active: bool = True):
         bot_app = None
 
     if token and active:
-        logger.info("Restarting: Initializing new Telegram Bot instance...")
+        logger.info("Restarting: Initializing new Telegram Bot instance (webhook mode)...")
         try:
             bot_app = create_bot_app(token)
             await bot_app.initialize()
             await bot_app.start()
-            await bot_app.updater.start_polling()
-            logger.info("Restarting: Bot started successfully.")
+
+            webhook_url = os.getenv("WEBHOOK_URL", "").rstrip("/")
+            if webhook_url:
+                full_webhook = f"{webhook_url}/telegram/webhook"
+                await bot_app.bot.set_webhook(
+                    url=full_webhook,
+                    drop_pending_updates=True,
+                )
+                logger.info(f"Restarting: Webhook re-registered: {full_webhook}")
+
+            logger.info("Restarting: Bot started successfully (webhook mode).")
             return True
         except Exception as e:
             logger.exception(f"Restarting: Failed to start bot: {e}")
@@ -480,7 +501,25 @@ def simulate_payment(order_id: str, db: Session = Depends(get_db), current_user:
         
     return {"success": True, "response": res}
 
-# ----------------- WEBHOOKS -----------------
+# ----------------- TELEGRAM WEBHOOK ENDPOINT -----------------
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Receives updates from Telegram (webhook mode) and passes them to the bot."""
+    if not bot_app:
+        logger.warning("Received Telegram webhook but bot is not initialized.")
+        return {"ok": False}
+    try:
+        data = await request.json()
+        from telegram import Update
+        update = Update.de_json(data, bot_app.bot)
+        await bot_app.process_update(update)
+    except Exception as e:
+        logger.error(f"Error processing Telegram webhook update: {e}")
+    return {"ok": True}
+
+
+# ----------------- PAKASIR WEBHOOKS -----------------
 
 class WebhookReq(BaseModel):
     amount: float
