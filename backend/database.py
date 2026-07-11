@@ -1,6 +1,6 @@
 import datetime
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 
@@ -64,7 +64,7 @@ class ProductItem(Base):
 class Transaction(Base):
     __tablename__ = "transactions"
     order_id = Column(String, primary_key=True, index=True)
-    telegram_user_id = Column(Integer, index=True)
+    telegram_user_id = Column(BigInteger, index=True)
     telegram_username = Column(String, nullable=True)
     product_id = Column(Integer, ForeignKey("products.id"))
     product_item_id = Column(Integer, ForeignKey("product_items.id"), nullable=True)
@@ -81,7 +81,7 @@ class Transaction(Base):
 
 class TelegramUser(Base):
     __tablename__ = "telegram_users"
-    id = Column(Integer, primary_key=True, index=True) # Telegram User ID
+    id = Column(BigInteger, primary_key=True, index=True) # Telegram User ID
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
