@@ -439,7 +439,7 @@ async def run_broadcast(users, message: str):
     logger.info(f"Broadcast completed. Success: {success_count}, Failed: {fail_count}")
 
 @app.post("/api/admin/broadcast")
-def send_broadcast(req: BroadcastReq, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+async def send_broadcast(req: BroadcastReq, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
     if not bot_app:
         raise HTTPException(status_code=400, detail="Bot Telegram saat ini tidak aktif atau belum dikonfigurasi.")
     
@@ -453,6 +453,7 @@ def send_broadcast(req: BroadcastReq, db: Session = Depends(get_db), current_use
     return {
         "success": True, 
         "message": f"Broadcast dijadwalkan untuk dikirim ke {len(users)} pengguna di background."
+
     }
 
 # Transactions Management
