@@ -121,6 +121,10 @@ async def produk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "Gunakan menu di bawah untuk mulai membeli."
             await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
             
+    except Exception as e:
+        import traceback
+        err_msg = f"❌ Terjadi kesalahan saat memproses /produk:\n`{str(e)}`\n\nTraceback:\n`{traceback.format_exc()[-1000:]}`"
+        await update.message.reply_text(err_msg, parse_mode="Markdown")
     finally:
         db.close()
 
