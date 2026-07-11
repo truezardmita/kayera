@@ -110,10 +110,8 @@ async def produk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # If the command was used in a group/supergroup, add a button to go to private chat
         if update.effective_chat.type in ["group", "supergroup"]:
-            text += "Silakan klik tombol di bawah ini untuk chat dengan Bot dan melakukan pembelian."
-            keyboard = [[InlineKeyboardButton("Beli Sekarang 🛍️", url=f"https://t.me/{bot_username}")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+            text += f"Silakan chat ke @{bot_username} untuk melakukan pembelian."
+            await update.message.reply_text(text, parse_mode="Markdown")
         else:
             text += "Gunakan menu di bawah untuk mulai membeli."
             await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
