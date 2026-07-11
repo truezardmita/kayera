@@ -276,7 +276,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("Maaf, stok untuk produk ini sedang kosong. Silakan hubungi admin.", show_alert=True)
 
         # Quantity selection step
-        elif data.startswith("qty_"):
+        elif data.startswith("qty_") and not data.startswith("qty_custom_"):
             prod_id = int(data.split("_")[1])
             p = database_crud.get_product_by_id(db, prod_id)
             stock_count = database_crud.get_available_stock_count(db, p.id)
@@ -285,42 +285,54 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.answer("Stok habis!", show_alert=True)
                 return
 
-            # Max qty is 10 or available stock, whichever is smaller
-            max_qty = min(stock_count, 10)
-
             text = (
                 f"🛒 *Pilih Jumlah Pembelian*\n\n"
                 f"Produk: *{clean_md(p.name)}*\n"
                 f"Harga Satuan: Rp {p.price:,.0f}\n"
                 f"Stok Tersedia: {stock_count}\n\n"
-                f"Pilih berapa banyak yang ingin dibeli:"
+                f"Pilih jumlah cepat atau ketik manual:"
             )
 
-            # Build quantity buttons (up to 5 per row)
+            # Quick-select buttons: 1, 2, 3, 5, 10 (capped to stock)
+            quick_qtys = [q for q in [1, 2, 3, 5, 10] if q <= stock_count]
             qty_buttons = []
             row = []
-            for q in range(1, max_qty + 1):
+            for q in quick_qtys:
                 total = p.price * q
                 total_str = f"{total:,.0f}".replace(",", ".")
                 row.append(InlineKeyboardButton(f"{q}x — Rp{total_str}", callback_data=f"buy_{p.id}_{q}"))
-                if len(row) == 2:  # 2 per row
+                if len(row) == 2:
                     qty_buttons.append(row)
                     row = []
             if row:
                 qty_buttons.append(row)
 
+            # Manual input button
+            qty_buttons.append([InlineKeyboardButton("✏️ Ketik Jumlah Sendiri", callback_data=f"qty_custom_{p.id}")])
             qty_buttons.append([InlineKeyboardButton("🔙 Kembali", callback_data=f"prod_{p.id}")])
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(qty_buttons))
 
-            cat_id = int(data.split("_")[2])
-            cat = database_crud.get_category_by_id(db, cat_id)
-            products = database_crud.get_products(db, category_id=cat_id, active_only=True)
-            
-            text, reply_markup = format_category_products_message(db, cat, products)
+        # Manual quantity input: ask user to type a number
+        elif data.startswith("qty_custom_"):
+            prod_id = int(data.split("_")[2])
+            p = database_crud.get_product_by_id(db, prod_id)
+            stock_count = database_crud.get_available_stock_count(db, p.id)
+
+            if stock_count <= 0:
+                await query.answer("Stok habis!", show_alert=True)
+                return
+
+            # Save state in user_data so the next text message is treated as qty input
+            context.user_data["waiting_qty_prod_id"] = prod_id
+            context.user_data["waiting_qty_stock"] = stock_count
+
             await query.edit_message_text(
-                text,
-                parse_mode="Markdown",
-                reply_markup=reply_markup
+                f"✏️ *Ketik Jumlah Pembelian*\n\n"
+                f"Produk: *{clean_md(p.name)}*\n"
+                f"Harga Satuan: Rp {p.price:,.0f}\n"
+                f"Stok Tersedia: {stock_count}\n\n"
+                f"Balas pesan ini dengan angka jumlah yang ingin dibeli (1 – {stock_count}):",
+                parse_mode="Markdown"
             )
 
         # Buy clicked: show payment methods
@@ -639,6 +651,68 @@ def generate_qr_code(qr_string: str) -> io.BytesIO:
     bio.seek(0)
     return bio
 
+# Handle manual quantity input (user types a number after clicking "Ketik Jumlah Sendiri")
+async def handle_manual_qty_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prod_id = context.user_data.get("waiting_qty_prod_id")
+    if not prod_id:
+        # Not waiting for qty input, ignore
+        return
+
+    text = update.message.text.strip()
+    db = SessionLocal()
+    try:
+        p = database_crud.get_product_by_id(db, prod_id)
+        stock_count = database_crud.get_available_stock_count(db, p.id)
+
+        # Validate input
+        if not text.isdigit():
+            await update.message.reply_text(
+                f"❌ Masukkan angka yang valid (1 – {stock_count}):"
+            )
+            return
+
+        qty = int(text)
+        if qty < 1:
+            await update.message.reply_text("❌ Jumlah minimal adalah 1.")
+            return
+        if qty > stock_count:
+            await update.message.reply_text(
+                f"❌ Stok hanya tersisa *{stock_count}*. Masukkan angka yang sesuai:",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Clear waiting state
+        context.user_data.pop("waiting_qty_prod_id", None)
+        context.user_data.pop("waiting_qty_stock", None)
+
+        # Show payment method selection
+        total = p.price * qty
+        text_msg = (
+            f"🛒 *Metode Pembayaran*\n\n"
+            f"Produk: *{clean_md(p.name)}*\n"
+            f"Jumlah: *{qty}x*\n"
+            f"Total: Rp {total:,.0f}\n\n"
+            "Silakan pilih metode pembayaran:"
+        )
+        keyboard = [
+            [InlineKeyboardButton("📱 QRIS (All E-Wallet / Bank)", callback_data=f"pay_{p.id}_{qty}_qris")],
+            [InlineKeyboardButton("🏦 BNI VA", callback_data=f"pay_{p.id}_{qty}_bni_va"), InlineKeyboardButton("🏦 BRI VA", callback_data=f"pay_{p.id}_{qty}_bri_va")],
+            [InlineKeyboardButton("🏦 CIMB VA", callback_data=f"pay_{p.id}_{qty}_cimb_niaga_va"), InlineKeyboardButton("🏦 Permata VA", callback_data=f"pay_{p.id}_{qty}_permata_va")],
+            [InlineKeyboardButton("🔙 Batal", callback_data=f"qty_{p.id}")]
+        ]
+        await update.message.reply_text(
+            text_msg,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logger.error(f"Error handling manual qty input: {e}")
+        await update.message.reply_text("❌ Terjadi kesalahan. Silakan coba lagi.")
+    finally:
+        db.close()
+
+
 # Webhook completion notifications (sent from main web app to Bot context)
 async def notify_user_payment_success(application: Application, order_id: str, item_content: str):
     db = SessionLocal()
@@ -666,12 +740,14 @@ async def notify_user_payment_success(application: Application, order_id: str, i
 def create_bot_app(token: str) -> Application:
     application = Application.builder().token(token).build()
     
-    # Handlers
+    # Handlers — order matters: specific text filters first, catch-all last
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.Text("🛍️ Beli Produk"), handle_beli_produk))
     application.add_handler(MessageHandler(filters.Text("🧾 Riwayat Transaksi"), handle_riwayat_transaksi))
     application.add_handler(MessageHandler(filters.Text("ℹ️ Informasi Bot"), handle_informasi_bot))
     application.add_handler(MessageHandler(filters.Text("📞 Hubungi Admin"), handle_hubungi_admin))
     application.add_handler(CallbackQueryHandler(handle_callback_query))
+    # Catch-all text handler for manual qty input (lowest priority)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manual_qty_input))
     
     return application
