@@ -201,10 +201,12 @@ class SettingsReq(BaseModel):
     bot_active: str
     bot_product_note: str
 
-# Broadcast now accepts multipart/form-data (message + optional image),
+# Broadcast now accepts multipart/form-data (message + optional image/video),
 # so it no longer uses a JSON pydantic model.
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/webm"}
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB (Telegram photo upload limit)
+MAX_VIDEO_SIZE = 50 * 1024 * 1024  # 50 MB (Telegram bot media upload limit)
 
 # ----------------- ADMIN API ENDPOINTS -----------------
 
@@ -419,37 +421,55 @@ async def update_settings(req: SettingsReq, db: Session = Depends(get_db), curre
 CAPTION_LIMIT = 1024
 
 # Broadcast Management
-async def run_broadcast(users, message: str, parse_mode: str = "Markdown", photo_bytes: bytes = None):
+async def run_broadcast(users, message: str, parse_mode: str = "Markdown",
+                        media_bytes: bytes = None, media_type: str = None):
+    """Broadcast a message to all users, optionally with an attached photo or video.
+
+    media_type: "photo" or "video" (None means text-only).
+    The uploaded media's file_id is cached after the first send and reused for the
+    remaining recipients, so the file is only uploaded to Telegram once.
+    """
     global bot_app
     if not bot_app:
         logger.error("Cannot run broadcast: Bot is not initialized or active.")
         return
 
-    logger.info(f"Starting broadcast to {len(users)} users. (with photo: {photo_bytes is not None})")
+    logger.info(f"Starting broadcast to {len(users)} users. (media: {media_type or 'none'})")
     success_count = 0
     fail_count = 0
-    # Cache the file_id from the first successful photo upload so we don't
-    # re-upload the same image for every recipient (faster + lighter on Telegram).
+    # Cache the file_id from the first successful media upload so we don't
+    # re-upload the same file for every recipient (faster + lighter on Telegram).
     cached_file_id = None
 
     for user in users:
         try:
-            if photo_bytes is not None:
-                # If the text fits within the caption limit, send it as the photo caption.
-                # Otherwise send the photo with no caption and follow up with a text message.
+            if media_bytes is not None and media_type in ("photo", "video"):
+                # If the text fits within the caption limit, send it as the media caption.
+                # Otherwise send the media with no caption and follow up with a text message.
                 use_caption = bool(message) and len(message) <= CAPTION_LIMIT
-                photo_to_send = cached_file_id if cached_file_id else photo_bytes
+                media_to_send = cached_file_id if cached_file_id else media_bytes
+                caption = message if use_caption else None
+                cap_parse = parse_mode if use_caption else None
 
-                sent = await bot_app.bot.send_photo(
-                    chat_id=user.id,
-                    photo=photo_to_send,
-                    caption=message if use_caption else None,
-                    parse_mode=parse_mode if use_caption else None
-                )
-
-                # Reuse the uploaded photo's file_id for the remaining recipients.
-                if not cached_file_id and sent and sent.photo:
-                    cached_file_id = sent.photo[-1].file_id
+                if media_type == "photo":
+                    sent = await bot_app.bot.send_photo(
+                        chat_id=user.id,
+                        photo=media_to_send,
+                        caption=caption,
+                        parse_mode=cap_parse
+                    )
+                    # Reuse the uploaded photo's file_id for the remaining recipients.
+                    if not cached_file_id and sent and sent.photo:
+                        cached_file_id = sent.photo[-1].file_id
+                else:  # video
+                    sent = await bot_app.bot.send_video(
+                        chat_id=user.id,
+                        video=media_to_send,
+                        caption=caption,
+                        parse_mode=cap_parse
+                    )
+                    if not cached_file_id and sent and sent.video:
+                        cached_file_id = sent.video.file_id
 
                 # Message too long for a caption: send full text separately.
                 if message and len(message) > CAPTION_LIMIT:
@@ -485,29 +505,46 @@ async def send_broadcast(
 
     message = (message or "").strip()
 
-    # Read and validate the optional image upload.
-    photo_bytes = None
+    # Read and validate the optional media upload (image or video).
+    media_bytes = None
+    media_type = None
     if image is not None and image.filename:
-        if image.content_type not in ALLOWED_IMAGE_TYPES:
-            raise HTTPException(status_code=400, detail="Format gambar tidak didukung. Gunakan JPG, PNG, atau WEBP.")
-        photo_bytes = await image.read()
-        if len(photo_bytes) > MAX_IMAGE_SIZE:
-            raise HTTPException(status_code=400, detail="Ukuran gambar terlalu besar (maksimal 10 MB).")
-        if len(photo_bytes) == 0:
-            raise HTTPException(status_code=400, detail="File gambar kosong atau gagal dibaca.")
+        content_type = image.content_type or ""
+        if content_type in ALLOWED_IMAGE_TYPES:
+            media_type = "photo"
+            max_size = MAX_IMAGE_SIZE
+            max_label = "10 MB"
+        elif content_type in ALLOWED_VIDEO_TYPES:
+            media_type = "video"
+            max_size = MAX_VIDEO_SIZE
+            max_label = "50 MB"
+        else:
+            raise HTTPException(status_code=400, detail="Format file tidak didukung. Gunakan gambar (JPG, PNG, WEBP) atau video (MP4, MOV, WEBM).")
 
-    # At least one of message or image must be provided.
-    if not message and photo_bytes is None:
-        raise HTTPException(status_code=400, detail="Pesan broadcast tidak boleh kosong. Isi teks atau lampirkan gambar.")
+        media_bytes = await image.read()
+        if len(media_bytes) == 0:
+            raise HTTPException(status_code=400, detail="File kosong atau gagal dibaca.")
+        if len(media_bytes) > max_size:
+            label = "Gambar" if media_type == "photo" else "Video"
+            raise HTTPException(status_code=400, detail=f"Ukuran {label.lower()} terlalu besar (maksimal {max_label}).")
+
+    # At least one of message or media must be provided.
+    if not message and media_bytes is None:
+        raise HTTPException(status_code=400, detail="Pesan broadcast tidak boleh kosong. Isi teks atau lampirkan gambar/video.")
 
     users = database_crud.get_telegram_users(db)
     if not users:
         return {"success": True, "message": "Tidak ada pengguna bot terdaftar untuk dikirimi broadcast."}
 
     # Run the broadcast process in background to prevent API gateway timeouts
-    asyncio.create_task(run_broadcast(users, message, photo_bytes=photo_bytes))
+    asyncio.create_task(run_broadcast(users, message, media_bytes=media_bytes, media_type=media_type))
 
-    kind = "pesan + gambar" if photo_bytes is not None else "pesan"
+    if media_type == "photo":
+        kind = "pesan + gambar"
+    elif media_type == "video":
+        kind = "pesan + video"
+    else:
+        kind = "pesan"
     return {
         "success": True,
         "message": f"Broadcast ({kind}) dijadwalkan untuk dikirim ke {len(users)} pengguna di background."

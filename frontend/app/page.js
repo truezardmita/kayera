@@ -40,6 +40,7 @@ export default function AdminDashboard() {
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [broadcastImage, setBroadcastImage] = useState(null);
   const [broadcastImagePreview, setBroadcastImagePreview] = useState(null);
+  const [broadcastMediaKind, setBroadcastMediaKind] = useState(null); // "photo" | "video"
 
   // Data states
   const [stats, setStats] = useState(null);
@@ -173,38 +174,51 @@ export default function AdminDashboard() {
     }
   };
 
-  // Broadcast: pick / clear image
+  // Broadcast: pick / clear media (image or video)
   const handleBroadcastImageChange = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
-    const allowed = ["image/jpeg", "image/png", "image/webp"];
-    if (!allowed.includes(file.type)) {
-      showToast("Format gambar tidak didukung. Gunakan JPG, PNG, atau WEBP.", "error");
-      e.target.value = "";
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      showToast("Ukuran gambar terlalu besar (maksimal 10 MB).", "error");
+    const imageTypes = ["image/jpeg", "image/png", "image/webp"];
+    const videoTypes = ["video/mp4", "video/quicktime", "video/webm"];
+
+    let kind = null;
+    if (imageTypes.includes(file.type)) kind = "photo";
+    else if (videoTypes.includes(file.type)) kind = "video";
+
+    if (!kind) {
+      showToast("Format file tidak didukung. Gunakan gambar (JPG, PNG, WEBP) atau video (MP4, MOV, WEBM).", "error");
       e.target.value = "";
       return;
     }
 
+    const maxSize = kind === "photo" ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
+    if (file.size > maxSize) {
+      const label = kind === "photo" ? "Gambar (maksimal 10 MB)" : "Video (maksimal 50 MB)";
+      showToast(`Ukuran file terlalu besar. ${label}.`, "error");
+      e.target.value = "";
+      return;
+    }
+
+    // Revoke any previous preview URL before creating a new one.
+    if (broadcastImagePreview) URL.revokeObjectURL(broadcastImagePreview);
     setBroadcastImage(file);
     setBroadcastImagePreview(URL.createObjectURL(file));
+    setBroadcastMediaKind(kind);
   };
 
   const clearBroadcastImage = () => {
     if (broadcastImagePreview) URL.revokeObjectURL(broadcastImagePreview);
     setBroadcastImage(null);
     setBroadcastImagePreview(null);
+    setBroadcastMediaKind(null);
   };
 
   // Broadcast: Send Message
   const handleSendBroadcast = async (e) => {
     e.preventDefault();
     if (!broadcastMessage.trim() && !broadcastImage) {
-      showToast("Pesan broadcast tidak boleh kosong. Isi teks atau lampirkan gambar.", "error");
+      showToast("Pesan broadcast tidak boleh kosong. Isi teks atau lampirkan gambar/video.", "error");
       return;
     }
 
@@ -1175,7 +1189,7 @@ export default function AdminDashboard() {
 
               <div className="form-group">
                 <label className="form-label" style={{ marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
-                  <ImageIcon size={16} /> Gambar (Opsional)
+                  <ImageIcon size={16} /> Gambar / Video (Opsional)
                 </label>
 
                 {!broadcastImagePreview ? (
@@ -1183,10 +1197,10 @@ export default function AdminDashboard() {
                     className="btn btn-secondary"
                     style={{ display: "inline-flex", alignItems: "center", gap: "8px", cursor: loading ? "not-allowed" : "pointer", width: "fit-content" }}
                   >
-                    <ImageIcon size={16} /> Pilih Gambar
+                    <ImageIcon size={16} /> Pilih Gambar / Video
                     <input
                       type="file"
-                      accept="image/jpeg,image/png,image/webp"
+                      accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
                       onChange={handleBroadcastImageChange}
                       disabled={loading}
                       style={{ display: "none" }}
@@ -1194,16 +1208,24 @@ export default function AdminDashboard() {
                   </label>
                 ) : (
                   <div style={{ position: "relative", display: "inline-block" }}>
-                    <img
-                      src={broadcastImagePreview}
-                      alt="Pratinjau gambar broadcast"
-                      style={{ maxWidth: "260px", maxHeight: "260px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", display: "block" }}
-                    />
+                    {broadcastMediaKind === "video" ? (
+                      <video
+                        src={broadcastImagePreview}
+                        controls
+                        style={{ maxWidth: "260px", maxHeight: "260px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", display: "block" }}
+                      />
+                    ) : (
+                      <img
+                        src={broadcastImagePreview}
+                        alt="Pratinjau media broadcast"
+                        style={{ maxWidth: "260px", maxHeight: "260px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", display: "block" }}
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={clearBroadcastImage}
                       disabled={loading}
-                      title="Hapus gambar"
+                      title="Hapus media"
                       style={{ position: "absolute", top: "6px", right: "6px", background: "rgba(0,0,0,0.65)", border: "none", borderRadius: "6px", color: "#fff", padding: "4px", cursor: "pointer", display: "flex" }}
                     >
                       <X size={16} />
@@ -1212,7 +1234,7 @@ export default function AdminDashboard() {
                 )}
 
                 <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-muted)", lineHeight: "1.5" }}>
-                  🖼️ Format JPG/PNG/WEBP, maksimal 10 MB. Jika teks lebih dari 1024 karakter, teks akan dikirim sebagai pesan terpisah setelah gambar.
+                  🖼️ Gambar JPG/PNG/WEBP (maks 10 MB) atau 🎬 video MP4/MOV/WEBM (maks 50 MB). Jika teks lebih dari 1024 karakter, teks akan dikirim sebagai pesan terpisah setelah media.
                 </div>
               </div>
 
