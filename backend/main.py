@@ -5,7 +5,7 @@ import hmac
 import hashlib
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import FastAPI, Depends, HTTPException, Header, Request, status
+from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -201,8 +201,10 @@ class SettingsReq(BaseModel):
     bot_active: str
     bot_product_note: str
 
-class BroadcastReq(BaseModel):
-    message: str
+# Broadcast now accepts multipart/form-data (message + optional image),
+# so it no longer uses a JSON pydantic model.
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB (Telegram photo upload limit)
 
 # ----------------- ADMIN API ENDPOINTS -----------------
 
@@ -413,24 +415,55 @@ async def update_settings(req: SettingsReq, db: Session = Depends(get_db), curre
         
     return {"success": True, "message": "Settings updated, Bot restart scheduled if token changed."}
 
+# Telegram caption limit is 1024 chars; message text limit is 4096.
+CAPTION_LIMIT = 1024
+
 # Broadcast Management
-async def run_broadcast(users, message: str, parse_mode: str = "Markdown"):
+async def run_broadcast(users, message: str, parse_mode: str = "Markdown", photo_bytes: bytes = None):
     global bot_app
     if not bot_app:
         logger.error("Cannot run broadcast: Bot is not initialized or active.")
         return
 
-    logger.info(f"Starting broadcast to {len(users)} users.")
+    logger.info(f"Starting broadcast to {len(users)} users. (with photo: {photo_bytes is not None})")
     success_count = 0
     fail_count = 0
+    # Cache the file_id from the first successful photo upload so we don't
+    # re-upload the same image for every recipient (faster + lighter on Telegram).
+    cached_file_id = None
 
     for user in users:
         try:
-            await bot_app.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode=parse_mode
-            )
+            if photo_bytes is not None:
+                # If the text fits within the caption limit, send it as the photo caption.
+                # Otherwise send the photo with no caption and follow up with a text message.
+                use_caption = bool(message) and len(message) <= CAPTION_LIMIT
+                photo_to_send = cached_file_id if cached_file_id else photo_bytes
+
+                sent = await bot_app.bot.send_photo(
+                    chat_id=user.id,
+                    photo=photo_to_send,
+                    caption=message if use_caption else None,
+                    parse_mode=parse_mode if use_caption else None
+                )
+
+                # Reuse the uploaded photo's file_id for the remaining recipients.
+                if not cached_file_id and sent and sent.photo:
+                    cached_file_id = sent.photo[-1].file_id
+
+                # Message too long for a caption: send full text separately.
+                if message and len(message) > CAPTION_LIMIT:
+                    await bot_app.bot.send_message(
+                        chat_id=user.id,
+                        text=message,
+                        parse_mode=parse_mode
+                    )
+            else:
+                await bot_app.bot.send_message(
+                    chat_id=user.id,
+                    text=message,
+                    parse_mode=parse_mode
+                )
             success_count += 1
             # Add delay to avoid hitting Telegram API limit (30 messages per second)
             await asyncio.sleep(0.05)
@@ -441,21 +474,43 @@ async def run_broadcast(users, message: str, parse_mode: str = "Markdown"):
     logger.info(f"Broadcast completed. Success: {success_count}, Failed: {fail_count}")
 
 @app.post("/api/admin/broadcast")
-async def send_broadcast(req: BroadcastReq, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+async def send_broadcast(
+    message: str = Form(""),
+    image: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    current_user: str = Depends(verify_admin_token)
+):
     if not bot_app:
         raise HTTPException(status_code=400, detail="Bot Telegram saat ini tidak aktif atau belum dikonfigurasi.")
-    
+
+    message = (message or "").strip()
+
+    # Read and validate the optional image upload.
+    photo_bytes = None
+    if image is not None and image.filename:
+        if image.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail="Format gambar tidak didukung. Gunakan JPG, PNG, atau WEBP.")
+        photo_bytes = await image.read()
+        if len(photo_bytes) > MAX_IMAGE_SIZE:
+            raise HTTPException(status_code=400, detail="Ukuran gambar terlalu besar (maksimal 10 MB).")
+        if len(photo_bytes) == 0:
+            raise HTTPException(status_code=400, detail="File gambar kosong atau gagal dibaca.")
+
+    # At least one of message or image must be provided.
+    if not message and photo_bytes is None:
+        raise HTTPException(status_code=400, detail="Pesan broadcast tidak boleh kosong. Isi teks atau lampirkan gambar.")
+
     users = database_crud.get_telegram_users(db)
     if not users:
         return {"success": True, "message": "Tidak ada pengguna bot terdaftar untuk dikirimi broadcast."}
-    
-    # Run the broadcast process in background to prevent API gateway timeouts
-    asyncio.create_task(run_broadcast(users, req.message))
-    
-    return {
-        "success": True, 
-        "message": f"Broadcast dijadwalkan untuk dikirim ke {len(users)} pengguna di background."
 
+    # Run the broadcast process in background to prevent API gateway timeouts
+    asyncio.create_task(run_broadcast(users, message, photo_bytes=photo_bytes))
+
+    kind = "pesan + gambar" if photo_bytes is not None else "pesan"
+    return {
+        "success": True,
+        "message": f"Broadcast ({kind}) dijadwalkan untuk dikirim ke {len(users)} pengguna di background."
     }
 
 @app.post("/api/admin/products/{product_id}/notify")

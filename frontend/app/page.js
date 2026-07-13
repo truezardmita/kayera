@@ -20,7 +20,8 @@ import {
   Bot,
   Megaphone,
   CheckCircle,
-  XCircle
+  XCircle,
+  Image as ImageIcon
 } from "lucide-react";
 
 const API_BASE = typeof window !== "undefined" && window.location.port === "3000"
@@ -37,6 +38,8 @@ export default function AdminDashboard() {
   // Navigation
   const [activeTab, setActiveTab] = useState("home"); // home, categories, products, settings, transactions, broadcast
   const [broadcastMessage, setBroadcastMessage] = useState("");
+  const [broadcastImage, setBroadcastImage] = useState(null);
+  const [broadcastImagePreview, setBroadcastImagePreview] = useState(null);
 
   // Data states
   const [stats, setStats] = useState(null);
@@ -170,29 +173,61 @@ export default function AdminDashboard() {
     }
   };
 
+  // Broadcast: pick / clear image
+  const handleBroadcastImageChange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const allowed = ["image/jpeg", "image/png", "image/webp"];
+    if (!allowed.includes(file.type)) {
+      showToast("Format gambar tidak didukung. Gunakan JPG, PNG, atau WEBP.", "error");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showToast("Ukuran gambar terlalu besar (maksimal 10 MB).", "error");
+      e.target.value = "";
+      return;
+    }
+
+    setBroadcastImage(file);
+    setBroadcastImagePreview(URL.createObjectURL(file));
+  };
+
+  const clearBroadcastImage = () => {
+    if (broadcastImagePreview) URL.revokeObjectURL(broadcastImagePreview);
+    setBroadcastImage(null);
+    setBroadcastImagePreview(null);
+  };
+
   // Broadcast: Send Message
   const handleSendBroadcast = async (e) => {
     e.preventDefault();
-    if (!broadcastMessage.trim()) {
-      showToast("Pesan broadcast tidak boleh kosong.", "error");
+    if (!broadcastMessage.trim() && !broadcastImage) {
+      showToast("Pesan broadcast tidak boleh kosong. Isi teks atau lampirkan gambar.", "error");
       return;
     }
-    
+
     setLoading(true);
     try {
+      const formData = new FormData();
+      formData.append("message", broadcastMessage);
+      if (broadcastImage) formData.append("image", broadcastImage);
+
       const res = await fetch(API_BASE + "/api/admin/broadcast", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          // Do NOT set Content-Type manually; the browser sets the multipart boundary.
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ message: broadcastMessage })
+        body: formData
       });
-      
+
       const data = await res.json();
       if (res.ok && data.success) {
         showToast(data.message || "Broadcast berhasil dikirim!", "success");
         setBroadcastMessage("");
+        clearBroadcastImage();
       } else {
         showToast(data.detail || "Gagal mengirim broadcast.", "error");
       }
@@ -1124,12 +1159,11 @@ export default function AdminDashboard() {
                 <label className="form-label" style={{ marginBottom: "8px", display: "block" }}>Isi Pesan Broadcast</label>
                 <textarea
                   className="form-textarea"
-                  style={{ minHeight: "250px", fontFamily: "monospace", fontSize: "14px" }}
+                  style={{ minHeight: "220px", fontFamily: "monospace", fontSize: "14px" }}
                   placeholder="Ketik pesan Anda di sini... (Mendukung format Markdown seperti *teks tebal*, _miring_, `code`, [link](http://example.com))"
                   value={broadcastMessage}
                   onChange={(e) => setBroadcastMessage(e.target.value)}
                   disabled={loading}
-                  required
                 />
                 <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-muted)", lineHeight: "1.5" }}>
                   💡 <strong>Catatan format Markdown:</strong><br />
@@ -1138,7 +1172,50 @@ export default function AdminDashboard() {
                   - Pastikan semua tag markdown lengkap (punya pasangan penutup) agar bot tidak gagal parsing.
                 </div>
               </div>
-              
+
+              <div className="form-group">
+                <label className="form-label" style={{ marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <ImageIcon size={16} /> Gambar (Opsional)
+                </label>
+
+                {!broadcastImagePreview ? (
+                  <label
+                    className="btn btn-secondary"
+                    style={{ display: "inline-flex", alignItems: "center", gap: "8px", cursor: loading ? "not-allowed" : "pointer", width: "fit-content" }}
+                  >
+                    <ImageIcon size={16} /> Pilih Gambar
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={handleBroadcastImageChange}
+                      disabled={loading}
+                      style={{ display: "none" }}
+                    />
+                  </label>
+                ) : (
+                  <div style={{ position: "relative", display: "inline-block" }}>
+                    <img
+                      src={broadcastImagePreview}
+                      alt="Pratinjau gambar broadcast"
+                      style={{ maxWidth: "260px", maxHeight: "260px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", display: "block" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={clearBroadcastImage}
+                      disabled={loading}
+                      title="Hapus gambar"
+                      style={{ position: "absolute", top: "6px", right: "6px", background: "rgba(0,0,0,0.65)", border: "none", borderRadius: "6px", color: "#fff", padding: "4px", cursor: "pointer", display: "flex" }}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                )}
+
+                <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-muted)", lineHeight: "1.5" }}>
+                  🖼️ Format JPG/PNG/WEBP, maksimal 10 MB. Jika teks lebih dari 1024 karakter, teks akan dikirim sebagai pesan terpisah setelah gambar.
+                </div>
+              </div>
+
               <button 
                 type="submit" 
                 className="btn btn-primary" 
