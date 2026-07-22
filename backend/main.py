@@ -3,7 +3,7 @@ import logging
 import asyncio
 import hmac
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 
 # Secret for stateless authentication tokens
 SECRET_KEY = "keyra_store_dashboard_secret_key"
+
+
+def iso_utc(dt):
+    """Serialize a naive-UTC datetime (as stored via datetime.utcnow) into an
+    ISO-8601 string with an explicit UTC offset. This lets clients convert the
+    timestamp to the correct local timezone (e.g. WIB / Asia/Jakarta)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 # Global Telegram Bot State
 bot_app = None
@@ -277,7 +288,7 @@ def admin_stats(db: Session = Depends(get_db), current_user: str = Depends(verif
             "total_payment": t.total_payment,
             "payment_method": t.payment_method,
             "status": t.status,
-            "created_at": t.created_at.isoformat()
+            "created_at": iso_utc(t.created_at)
         })
         
     return {
@@ -302,7 +313,7 @@ def get_categories(db: Session = Depends(get_db), current_user: str = Depends(ve
         "id": c.id,
         "name": c.name,
         "slug": c.slug,
-        "created_at": c.created_at.isoformat()
+        "created_at": iso_utc(c.created_at)
     } for c in categories]
 
 @app.post("/api/admin/categories")
@@ -336,7 +347,7 @@ def get_products(db: Session = Depends(get_db), current_user: str = Depends(veri
             "price": p.price,
             "is_active": p.is_active,
             "stock_count": stock_count,
-            "created_at": p.created_at.isoformat()
+            "created_at": iso_utc(p.created_at)
         })
     return res
 
@@ -371,8 +382,8 @@ def get_product_stock(prod_id: int, db: Session = Depends(get_db), current_user:
         "id": i.id,
         "content": i.content,
         "is_sold": i.is_sold,
-        "created_at": i.created_at.isoformat(),
-        "sold_at": i.sold_at.isoformat() if i.sold_at else None
+        "created_at": iso_utc(i.created_at),
+        "sold_at": iso_utc(i.sold_at)
     } for i in items]
 
 @app.post("/api/admin/products/{prod_id}/stock")
@@ -616,8 +627,8 @@ def get_admin_transactions(db: Session = Depends(get_db), current_user: str = De
         "total_payment": t.total_payment,
         "payment_method": t.payment_method,
         "status": t.status,
-        "created_at": t.created_at.isoformat(),
-        "completed_at": t.completed_at.isoformat() if t.completed_at else None
+        "created_at": iso_utc(t.created_at),
+        "completed_at": iso_utc(t.completed_at)
     } for t in txs]
 
 # Manually confirm transaction

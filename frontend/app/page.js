@@ -53,6 +53,7 @@ export default function AdminDashboard() {
   const [modalType, setModalType] = useState(null); // 'add_category', 'add_product', 'edit_product', 'manage_stock'
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [stockItems, setStockItems] = useState([]);
+  const [stockFilter, setStockFilter] = useState("all"); // all | available | sold
   const [bulkStockText, setBulkStockText] = useState("");
   
   // Modals Input fields
@@ -421,6 +422,7 @@ export default function AdminDashboard() {
     setSelectedProduct(p);
     setModalType("manage_stock");
     setBulkStockText("");
+    setStockFilter("all");
     try {
       const res = await fetch(API_BASE + `/api/admin/products/${p.id}/stock`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -872,7 +874,7 @@ export default function AdminDashboard() {
                       <td>{cat.id}</td>
                       <td style={{ fontWeight: "600" }}>{cat.name}</td>
                       <td><code>{cat.slug}</code></td>
-                      <td>{new Date(cat.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}</td>
+                      <td>{new Date(cat.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Jakarta" })}</td>
                       <td>
                         <button className="btn btn-danger btn-sm" onClick={() => handleDeleteCategory(cat.id)}>
                           <Trash2 size={12} /> Hapus
@@ -992,7 +994,7 @@ export default function AdminDashboard() {
                       </td>
                       <td style={{ fontWeight: "600" }}>Rp {tx.total_payment.toLocaleString()}</td>
                       <td style={{ fontSize: "13px" }}>
-                        {new Date(tx.created_at).toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                        {new Date(tx.created_at).toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} WIB
                       </td>
                       <td>
                         <span className={`badge badge-${tx.status}`}>{tx.status}</span>
@@ -1414,6 +1416,22 @@ export default function AdminDashboard() {
 
                 {/* Stock lists table */}
                 <h4 style={{ fontSize: "14px", fontWeight: "600", marginBottom: "12px" }}>Daftar Item Stok</h4>
+                <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
+                  {[
+                    { key: "all", label: "Semua", count: stockItems.length },
+                    { key: "available", label: "Tersedia", count: stockItems.filter((i) => !i.is_sold).length },
+                    { key: "sold", label: "Terjual", count: stockItems.filter((i) => i.is_sold).length },
+                  ].map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      className={`btn btn-sm ${stockFilter === f.key ? "btn-primary" : "btn-secondary"}`}
+                      onClick={() => setStockFilter(f.key)}
+                    >
+                      {f.label} ({f.count})
+                    </button>
+                  ))}
+                </div>
                 <div style={{ overflowX: "auto", border: "1px solid var(--card-border)", borderRadius: "12px" }}>
                   <table className="data-table" style={{ fontSize: "13px" }}>
                     <thead>
@@ -1424,7 +1442,13 @@ export default function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {stockItems.map((item) => (
+                      {stockItems
+                        .filter((item) =>
+                          stockFilter === "available" ? !item.is_sold
+                          : stockFilter === "sold" ? item.is_sold
+                          : true
+                        )
+                        .map((item) => (
                         <tr key={item.id}>
                           <td style={{ fontFamily: "monospace", wordBreak: "break-all" }}>{item.content}</td>
                           <td>
@@ -1444,6 +1468,18 @@ export default function AdminDashboard() {
                       {stockItems.length === 0 && (
                         <tr>
                           <td colSpan="3" style={{ textAlign: "center", color: "var(--text-muted)", padding: "20px" }}>Belum ada stok. Silakan masukkan data di atas.</td>
+                        </tr>
+                      )}
+                      {stockItems.length > 0 &&
+                        stockItems.filter((item) =>
+                          stockFilter === "available" ? !item.is_sold
+                          : stockFilter === "sold" ? item.is_sold
+                          : true
+                        ).length === 0 && (
+                        <tr>
+                          <td colSpan="3" style={{ textAlign: "center", color: "var(--text-muted)", padding: "20px" }}>
+                            {stockFilter === "sold" ? "Belum ada item yang terjual." : "Tidak ada item yang tersedia."}
+                          </td>
                         </tr>
                       )}
                     </tbody>

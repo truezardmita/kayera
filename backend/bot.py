@@ -2,7 +2,10 @@ import logging
 import io
 import asyncio
 import qrcode
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# Waktu Indonesia Barat (WIB / Asia Jakarta = UTC+7)
+WIB = timezone(timedelta(hours=7))
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -519,7 +522,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             # expired_at is usually RFC3339 string like "2025-09-19T01:18:49.678622564Z"
             try:
                 dt = datetime.fromisoformat(expired_str.replace("Z", "+00:00"))
-                expired_formatted = dt.strftime("%d %b %Y, %H:%M:%S UTC")
+                # Konversi otomatis ke waktu WIB (Asia/Jakarta)
+                expired_formatted = dt.astimezone(WIB).strftime("%d %b %Y, %H:%M:%S WIB")
             except:
                 expired_formatted = expired_str
 
