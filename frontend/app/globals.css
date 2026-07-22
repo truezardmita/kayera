@@ -426,9 +426,10 @@ html, body {
 }
 
 .table-container {
-  overflow-x: auto;
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
   width: 100%;
+  max-height: calc(100vh - 220px);
 }
 
 .data-table {
@@ -440,11 +441,14 @@ html, body {
 }
 
 .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 16px 24px;
   font-weight: 600;
   color: var(--text-secondary);
   border-bottom: 1px solid var(--card-border);
-  background: rgba(0, 0, 0, 0.15);
+  background: #181334;
 }
 
 .data-table td {
