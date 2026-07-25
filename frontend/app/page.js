@@ -21,8 +21,20 @@ import {
   Megaphone,
   CheckCircle,
   XCircle,
+  Zap,
+  RefreshCw,
   Image as ImageIcon
 } from "lucide-react";
+
+// Provider Seller API Markastools yang didukung untuk auto-inject akun pembeli
+const INJECT_PROVIDERS = [
+  { value: "weavy", label: "Weavy" },
+  { value: "framia", label: "Framia" },
+  { value: "roboneo", label: "Roboneo" },
+];
+
+const providerLabel = (value) =>
+  INJECT_PROVIDERS.find((p) => p.value === value)?.label || value;
 
 const API_BASE = typeof window !== "undefined" && window.location.port === "3000"
   ? "http://localhost:8000"
@@ -64,6 +76,8 @@ export default function AdminDashboard() {
   const [productPrice, setProductPrice] = useState("");
   const [productDescription, setProductDescription] = useState("");
   const [productActive, setProductActive] = useState(true);
+  const [productInjectProvider, setProductInjectProvider] = useState("");
+  const [productInjectRecipeId, setProductInjectRecipeId] = useState("");
 
   // Settings fields
   const [settingsForm, setSettingsForm] = useState({
@@ -346,7 +360,10 @@ export default function AdminDashboard() {
       name: productName,
       description: productDescription,
       price: parseFloat(productPrice),
-      is_active: productActive
+      is_active: productActive,
+      inject_provider: productInjectProvider,
+      // recipe_id hanya relevan untuk Weavy
+      inject_recipe_id: productInjectProvider === "weavy" ? productInjectRecipeId : ""
     };
 
     try {
@@ -355,7 +372,7 @@ export default function AdminDashboard() {
         ? "/api/admin/products" 
         : `/api/admin/products/${selectedProduct.id}`;
 
-      const res = await fetch(url, {
+      const res = await fetch(API_BASE + url, {
         method,
         headers: {
           "Content-Type": "application/json",
@@ -384,6 +401,8 @@ export default function AdminDashboard() {
     setProductPrice("");
     setProductDescription("");
     setProductActive(true);
+    setProductInjectProvider("");
+    setProductInjectRecipeId("");
     setSelectedProduct(null);
   };
 
@@ -394,6 +413,8 @@ export default function AdminDashboard() {
     setProductPrice(p.price);
     setProductDescription(p.description || "");
     setProductActive(p.is_active);
+    setProductInjectProvider(p.inject_provider || "");
+    setProductInjectRecipeId(p.inject_recipe_id || "");
     setModalType("edit_product");
   };
 
@@ -548,6 +569,70 @@ export default function AdminDashboard() {
     } catch (err) {
       showToast("Error.", "error");
     }
+  };
+
+  // Action: Retry the Markastools auto-inject for a paid transaction
+  const handleRetryInject = async (tx) => {
+    const email = prompt(
+      "Kirim ulang akun ke Markastools.\n\nEmail tujuan pembeli:",
+      tx.buyer_email || ""
+    );
+    if (email === null) return;
+    const trimmed = email.trim();
+    if (!trimmed) {
+      showToast("Email tujuan tidak boleh kosong.", "error");
+      return;
+    }
+    try {
+      showToast("Mengirim akun ke Markastools...");
+      const res = await fetch(API_BASE + `/api/admin/transactions/${tx.order_id}/inject`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ email: trimmed }),
+      });
+      const data = await res.json();
+      if (res.status === 200 && data.success) {
+        showToast(data.message || "Akun berhasil dikirim ke Markastools.");
+      } else {
+        showToast(data.detail || data.message || "Gagal mengirim akun ke Markastools.", "error");
+      }
+      fetchData();
+    } catch (err) {
+      showToast("Error saat menghubungi server.", "error");
+    }
+  };
+
+  // Badge status auto-inject Markastools
+  const renderInjectStatus = (tx) => {
+    if (!tx.inject_provider) {
+      return <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>—</span>;
+    }
+    const map = {
+      success: { badge: "completed", text: "Terkirim" },
+      partial: { badge: "pending", text: "Sebagian" },
+      failed: { badge: "cancelled", text: "Gagal" },
+    };
+    const info = map[tx.inject_status] || { badge: "pending", text: "Menunggu" };
+    return (
+      <div>
+        <span className={`badge badge-${info.badge}`}>
+          {providerLabel(tx.inject_provider)}: {info.text}
+        </span>
+        {tx.buyer_email && (
+          <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>
+            {tx.buyer_email}
+          </div>
+        )}
+        {tx.inject_detail && tx.inject_status !== "success" && (
+          <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px", maxWidth: "260px" }}>
+            {tx.inject_detail}
+          </div>
+        )}
+      </div>
+    );
   };
 
   // Login view if not authenticated
@@ -908,6 +993,7 @@ export default function AdminDashboard() {
                     <th>Nama Produk</th>
                     <th>Harga</th>
                     <th>Stok Tersedia</th>
+                    <th>Auto-Inject</th>
                     <th>Status</th>
                     <th style={{ width: "280px" }}>Aksi</th>
                   </tr>
@@ -927,6 +1013,15 @@ export default function AdminDashboard() {
                         <span style={{ fontWeight: "600", color: p.stock_count > 0 ? "var(--success)" : "var(--danger)" }}>
                           {p.stock_count} item
                         </span>
+                      </td>
+                      <td>
+                        {p.inject_provider ? (
+                          <span className="badge badge-completed" title="Akun otomatis dikirim ke akun Markastools pembeli">
+                            <Zap size={11} /> {providerLabel(p.inject_provider)}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Manual</span>
+                        )}
                       </td>
                       <td>
                         <span className={`badge badge-${p.is_active ? "completed" : "cancelled"}`}>
@@ -950,7 +1045,7 @@ export default function AdminDashboard() {
                   ))}
                   {products.length === 0 && (
                     <tr>
-                      <td colSpan="7" style={{ textAlign: "center", color: "var(--text-muted)" }}>Belum ada produk. Silakan tambahkan produk baru.</td>
+                      <td colSpan="8" style={{ textAlign: "center", color: "var(--text-muted)" }}>Belum ada produk. Silakan tambahkan produk baru.</td>
                     </tr>
                   )}
                 </tbody>
@@ -976,6 +1071,7 @@ export default function AdminDashboard() {
                     <th>Total Bayar</th>
                     <th>Tanggal Pemesanan</th>
                     <th>Status</th>
+                    <th>Markastools</th>
                     <th>Aksi</th>
                   </tr>
                 </thead>
@@ -999,6 +1095,7 @@ export default function AdminDashboard() {
                       <td>
                         <span className={`badge badge-${tx.status}`}>{tx.status}</span>
                       </td>
+                      <td>{renderInjectStatus(tx)}</td>
                       <td>
                         {tx.status === "pending" && (
                           <div style={{ display: "flex", gap: "6px" }}>
@@ -1010,12 +1107,17 @@ export default function AdminDashboard() {
                             </button>
                           </div>
                         )}
+                        {tx.status === "completed" && tx.inject_provider && (
+                          <button className="btn btn-secondary btn-sm" onClick={() => handleRetryInject(tx)}>
+                            <RefreshCw size={12} /> Kirim Ulang
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
                   {transactions.length === 0 && (
                     <tr>
-                      <td colSpan="8" style={{ textAlign: "center", color: "var(--text-muted)" }}>Belum ada data transaksi.</td>
+                      <td colSpan="9" style={{ textAlign: "center", color: "var(--text-muted)" }}>Belum ada data transaksi.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1362,6 +1464,49 @@ export default function AdminDashboard() {
                       onChange={(e) => setProductDescription(e.target.value)}
                     />
                   </div>
+                  <div className="form-group">
+                    <label className="form-label">
+                      <Zap size={12} /> Auto-Inject ke Markastools
+                    </label>
+                    <select
+                      className="form-select"
+                      value={productInjectProvider}
+                      onChange={(e) => setProductInjectProvider(e.target.value)}
+                    >
+                      <option value="">Tidak — kirim file token saja (manual)</option>
+                      {INJECT_PROVIDERS.map((prov) => (
+                        <option key={prov.value} value={prov.value}>{prov.label}</option>
+                      ))}
+                    </select>
+                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "6px", lineHeight: "1.5" }}>
+                      {productInjectProvider ? (
+                        <>
+                          Bot akan meminta email Markastools pembeli sebelum invoice dibuat, lalu
+                          otomatis memasukkan akun <b>{providerLabel(productInjectProvider)}</b> ke
+                          akun pembeli setelah pembayaran terverifikasi.
+                          <br />
+                          Format stok: <b>satu token per baris</b>
+                          {productInjectProvider === "roboneo" ? " (API key Roboneo)" : ""}, nama akun
+                          opsional dengan format <code>token|nama akun</code>
+                          {productInjectProvider === "roboneo" ? " (nama diabaikan Roboneo)" : ""}.
+                        </>
+                      ) : (
+                        <>Produk dikirim seperti biasa: isi stok dikirim sebagai file .txt ke pembeli.</>
+                      )}
+                    </div>
+                  </div>
+                  {productInjectProvider === "weavy" && (
+                    <div className="form-group">
+                      <label className="form-label">Recipe ID Weavy (Opsional)</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="Kosongkan jika tidak dipakai"
+                        value={productInjectRecipeId}
+                        onChange={(e) => setProductInjectRecipeId(e.target.value)}
+                      />
+                    </div>
+                  )}
                   <div className="form-group" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                     <input
                       type="checkbox"

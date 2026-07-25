@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from backend.database import init_db, get_db, SessionLocal
 from backend import database_crud
-from backend.bot import create_bot_app, notify_user_payment_success
+from backend import markastools
+from backend.bot import create_bot_app, notify_user_payment_success, inject_purchase
 from backend.pakasir import simulate_pakasir_payment
 
 # Logging Configuration
@@ -26,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 # Secret for stateless authentication tokens
 SECRET_KEY = "keyra_store_dashboard_secret_key"
+
+# API key Seller Markastools (https://ai.markastools.id) untuk auto-inject akun
+# ke pembeli. Bisa dioverride lewat env MARKASTOOLS_SELLER_API_KEY.
+MARKASTOOLS_SELLER_API_KEY = "sk_seller_fnNiWITDcdGmy83splpAdk_4iaLb1ktKcqnuo9fQF_Q"
+markastools.configure(os.getenv("MARKASTOOLS_SELLER_API_KEY") or MARKASTOOLS_SELLER_API_KEY)
 
 
 def iso_utc(dt):
@@ -195,9 +201,16 @@ class ProductReq(BaseModel):
     description: Optional[str] = None
     price: float
     is_active: Optional[bool] = True
+    # Auto-inject Markastools: "", "weavy", "framia", atau "roboneo"
+    inject_provider: Optional[str] = None
+    inject_recipe_id: Optional[str] = None
 
 class StockReq(BaseModel):
     content: str # Bulk contents split by lines
+
+class InjectReq(BaseModel):
+    # Opsional: kirim email baru bila pembeli salah tulis email saat checkout
+    email: Optional[str] = None
 
 class SettingsReq(BaseModel):
     telegram_bot_token: str
@@ -347,21 +360,40 @@ def get_products(db: Session = Depends(get_db), current_user: str = Depends(veri
             "price": p.price,
             "is_active": p.is_active,
             "stock_count": stock_count,
+            "inject_provider": p.inject_provider or "",
+            "inject_recipe_id": p.inject_recipe_id or "",
             "created_at": iso_utc(p.created_at)
         })
     return res
 
+def validate_inject_provider(value: Optional[str]) -> str:
+    """Kosong berarti produk dikirim manual; selain itu harus provider valid."""
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    provider = markastools.normalize_provider(raw)
+    if not provider:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Provider auto-inject tidak dikenal: '{raw}'. Pilih salah satu dari {', '.join(markastools.SUPPORTED_PROVIDERS)}."
+        )
+    return provider
+
 @app.post("/api/admin/products")
 def create_product(req: ProductReq, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+    provider = validate_inject_provider(req.inject_provider)
     p = database_crud.create_product(
-        db, req.category_id, req.name, req.description, req.price, req.is_active
+        db, req.category_id, req.name, req.description, req.price, req.is_active,
+        inject_provider=provider, inject_recipe_id=(req.inject_recipe_id or "").strip()
     )
     return {"success": True, "product": {"id": p.id, "name": p.name}}
 
 @app.put("/api/admin/products/{prod_id}")
 def update_product(prod_id: int, req: ProductReq, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+    provider = validate_inject_provider(req.inject_provider)
     p = database_crud.update_product(
-        db, prod_id, req.name, req.description, req.price, req.is_active
+        db, prod_id, req.name, req.description, req.price, req.is_active,
+        inject_provider=provider, inject_recipe_id=(req.inject_recipe_id or "").strip()
     )
     if p:
         return {"success": True}
@@ -627,6 +659,10 @@ def get_admin_transactions(db: Session = Depends(get_db), current_user: str = De
         "total_payment": t.total_payment,
         "payment_method": t.payment_method,
         "status": t.status,
+        "buyer_email": t.buyer_email or "",
+        "inject_provider": (t.product.inject_provider or "") if t.product else "",
+        "inject_status": t.inject_status or "",
+        "inject_detail": t.inject_detail or "",
         "created_at": iso_utc(t.created_at),
         "completed_at": iso_utc(t.completed_at)
     } for t in txs]
@@ -646,6 +682,51 @@ async def confirm_payment(order_id: str, db: Session = Depends(get_db), current_
         asyncio.create_task(notify_user_payment_success(bot_app, tx.order_id, val_content))
         
     return {"success": True, "message": "Transaksi berhasil dikonfirmasi secara manual."}
+
+# Manually retry the Markastools auto-inject for a paid transaction
+@app.post("/api/admin/transactions/{order_id}/inject")
+async def retry_inject(order_id: str, req: InjectReq = None, db: Session = Depends(get_db), current_user: str = Depends(verify_admin_token)):
+    tx = database_crud.get_transaction_by_id(db, order_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
+    if tx.status != "completed":
+        raise HTTPException(status_code=400, detail="Auto-inject hanya bisa dijalankan untuk transaksi yang sudah dibayar.")
+
+    product = tx.product
+    provider = markastools.normalize_provider(product.inject_provider if product else None)
+    if not provider:
+        raise HTTPException(status_code=400, detail="Produk ini tidak memakai fitur auto-inject Markastools.")
+
+    override_email = (req.email or "").strip() if req else ""
+    if not override_email and not (tx.buyer_email or "").strip():
+        raise HTTPException(status_code=400, detail="Email Markastools pembeli belum ada. Kirim email tujuan pada request ini.")
+
+    note = await inject_purchase(order_id, override_email=override_email or None)
+
+    # Ambil status terbaru setelah proses inject
+    db.expire_all()
+    tx = database_crud.get_transaction_by_id(db, order_id)
+    inject_status = tx.inject_status or "failed"
+    inject_detail = tx.inject_detail or ""
+
+    # Kabari pembeli lewat Telegram hanya bila injectnya berhasil
+    if inject_status in ("success", "partial") and bot_app and note:
+        try:
+            await bot_app.bot.send_message(
+                chat_id=tx.telegram_user_id,
+                text=f"{note}\n\nOrder: `{order_id}`",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Gagal mengabari pembeli setelah retry inject {order_id}: {e}")
+
+    return {
+        "success": inject_status in ("success", "partial"),
+        "inject_status": inject_status,
+        "inject_detail": inject_detail,
+        "buyer_email": tx.buyer_email or "",
+        "message": inject_detail or "Proses auto-inject selesai."
+    }
 
 # Manually cancel transaction
 @app.post("/api/admin/transactions/{order_id}/cancel")

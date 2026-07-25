@@ -74,20 +74,27 @@ def get_products(db: Session, category_id: int = None, active_only: bool = False
 def get_product_by_id(db: Session, prod_id: int):
     return db.query(Product).filter(Product.id == prod_id).first()
 
-def create_product(db: Session, category_id: int, name: str, description: str, price: float, is_active: bool = True):
-    product = Product(category_id=category_id, name=name, description=description, price=price, is_active=is_active)
+def create_product(db: Session, category_id: int, name: str, description: str, price: float, is_active: bool = True,
+                   inject_provider: str = None, inject_recipe_id: str = None):
+    product = Product(
+        category_id=category_id, name=name, description=description, price=price, is_active=is_active,
+        inject_provider=(inject_provider or None), inject_recipe_id=(inject_recipe_id or None)
+    )
     db.add(product)
     db.commit()
     db.refresh(product)
     return product
 
-def update_product(db: Session, prod_id: int, name: str, description: str, price: float, is_active: bool):
+def update_product(db: Session, prod_id: int, name: str, description: str, price: float, is_active: bool,
+                   inject_provider: str = None, inject_recipe_id: str = None):
     product = get_product_by_id(db, prod_id)
     if product:
         product.name = name
         product.description = description
         product.price = price
         product.is_active = is_active
+        product.inject_provider = inject_provider or None
+        product.inject_recipe_id = inject_recipe_id or None
         db.commit()
         db.refresh(product)
     return product
@@ -143,7 +150,7 @@ def delete_stock_item(db: Session, item_id: int):
     return False
 
 # Transaction helpers
-def create_transaction(db: Session, telegram_user_id: int, telegram_username: str, product_id: int, amount: float, fee: float, total_payment: float, payment_method: str, order_id: str = None) -> Transaction:
+def create_transaction(db: Session, telegram_user_id: int, telegram_username: str, product_id: int, amount: float, fee: float, total_payment: float, payment_method: str, order_id: str = None, buyer_email: str = None) -> Transaction:
     if not order_id:
         # Generate random unique ID
         timestamp = datetime.now().strftime("%y%m%d%H%M")
@@ -159,7 +166,8 @@ def create_transaction(db: Session, telegram_user_id: int, telegram_username: st
         fee=fee,
         total_payment=total_payment,
         payment_method=payment_method,
-        status="pending"
+        status="pending",
+        buyer_email=(buyer_email or None)
     )
     db.add(tx)
     db.commit()
@@ -199,11 +207,15 @@ def complete_transaction(db: Session, order_id: str) -> Transaction:
             tx.product_item_id = unsold_items[0].id
             tx.status = "completed"
             tx.completed_at = datetime.utcnow()
-            db.commit()
-            db.refresh(tx)
 
             # Return all items' content joined together
             all_content = "\n".join(item.content for item in unsold_items)
+            # Simpan isi stok yang terkirim agar auto-inject Markastools bisa
+            # diulang dari dashboard bila gagal di percobaan pertama.
+            tx.delivered_content = all_content
+            db.commit()
+            db.refresh(tx)
+
             return tx, all_content
         else:
             # Paid but stock runs out — mark completed without item

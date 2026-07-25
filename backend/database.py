@@ -43,6 +43,10 @@ class Product(Base):
     description = Column(String, nullable=True)
     price = Column(Float, default=0.0)
     is_active = Column(Boolean, default=True)
+    # Auto-inject ke Markastools: "weavy" | "framia" | "roboneo".
+    # Kosong / NULL berarti produk dikirim manual (hanya file .txt seperti biasa).
+    inject_provider = Column(String, nullable=True)
+    inject_recipe_id = Column(String, nullable=True)  # opsional, hanya dipakai Weavy
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     category = relationship("Category", back_populates="products")
@@ -76,6 +80,13 @@ class Transaction(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     invoice_msg_id = Column(Integer, nullable=True)
+    # Email akun Markastools milik pembeli (diisi saat checkout produk auto-inject)
+    buyer_email = Column(String, nullable=True)
+    # Status auto-inject: pending, success, partial, failed
+    inject_status = Column(String, nullable=True)
+    inject_detail = Column(String, nullable=True)
+    # Isi stok yang dikirim ke pembeli (satu item per baris), dipakai untuk retry inject
+    delivered_content = Column(String, nullable=True)
 
     product = relationship("Product", back_populates="transactions")
     product_item = relationship("ProductItem", back_populates="transaction")
@@ -87,21 +98,73 @@ class TelegramUser(Base):
     first_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+# Kolom yang wajib ada setelah migrasi berjalan. Dipakai untuk memverifikasi
+# hasil migrasi saat boot (lihat verify_schema) supaya kegagalan ALTER TABLE
+# terlihat jelas di log deploy, bukan muncul sebagai error 500 saat dipakai.
+REQUIRED_COLUMNS = {
+    "products": ["inject_provider", "inject_recipe_id"],
+    "transactions": ["invoice_msg_id", "buyer_email", "inject_status", "inject_detail", "delivered_content"],
+}
+
+
+def verify_schema() -> list:
+    """Pastikan kolom hasil migrasi benar-benar ada. Mengembalikan daftar kolom
+    yang masih hilang (kosong berarti skema sudah lengkap)."""
+    from sqlalchemy import inspect
+
+    missing = []
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        for table, columns in REQUIRED_COLUMNS.items():
+            if table not in tables:
+                continue
+            existing = {col["name"] for col in inspector.get_columns(table)}
+            missing.extend(f"{table}.{col}" for col in columns if col not in existing)
+    except Exception as e:
+        print(f"Schema check gagal dijalankan: {e}")
+        return []
+
+    if missing:
+        print(
+            "!!! SCHEMA WARNING: kolom berikut belum ada di database -> "
+            + ", ".join(missing)
+            + ". Fitur auto-inject Markastools akan error sampai kolom ini dibuat."
+        )
+    else:
+        print("Schema check OK: semua kolom yang dibutuhkan tersedia.")
+    return missing
+
+
 def run_migrations():
     """
     Run manual SQL migrations for schema changes that SQLAlchemy's create_all
     won't apply automatically (e.g., changing column types on existing tables).
     """
+    is_postgres = DATABASE_URL.startswith("postgresql")
+
+    # PostgreSQL mendukung ADD COLUMN IF NOT EXISTS sehingga deploy berulang tidak
+    # memicu error sama sekali. SQLite belum mendukungnya, jadi errornya ditangkap
+    # dan dianggap "sudah pernah dijalankan".
+    add_column = "ADD COLUMN IF NOT EXISTS" if is_postgres else "ADD COLUMN"
+
     migrations = []
-    if DATABASE_URL.startswith("postgresql"):
+    if is_postgres:
         migrations.extend([
             # Fix: Telegram User IDs are 64-bit, must be BIGINT not INT
             "ALTER TABLE telegram_users ALTER COLUMN id TYPE BIGINT",
             "ALTER TABLE transactions ALTER COLUMN telegram_user_id TYPE BIGINT",
         ])
-        
+
     migrations.extend([
-        "ALTER TABLE transactions ADD COLUMN invoice_msg_id INTEGER",
+        f"ALTER TABLE transactions {add_column} invoice_msg_id INTEGER",
+        # Integrasi auto-inject Markastools
+        f"ALTER TABLE products {add_column} inject_provider VARCHAR",
+        f"ALTER TABLE products {add_column} inject_recipe_id VARCHAR",
+        f"ALTER TABLE transactions {add_column} buyer_email VARCHAR",
+        f"ALTER TABLE transactions {add_column} inject_status VARCHAR",
+        f"ALTER TABLE transactions {add_column} inject_detail VARCHAR",
+        f"ALTER TABLE transactions {add_column} delivered_content VARCHAR",
     ])
 
     with engine.connect() as conn:
@@ -114,6 +177,9 @@ def run_migrations():
                 # Column may already exist — safe to ignore
                 conn.rollback()
                 print(f"Migration skipped (already done or not needed): {e}")
+
+    # Laporkan hasilnya supaya ketahuan di log Railway bila ada yang gagal
+    verify_schema()
 
 
 def init_db():

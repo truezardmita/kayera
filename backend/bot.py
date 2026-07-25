@@ -1,5 +1,6 @@
 import logging
 import io
+import re
 import asyncio
 import qrcode
 from datetime import datetime, timezone, timedelta
@@ -26,9 +27,15 @@ from telegram.ext import (
 
 from backend.database import SessionLocal, Setting
 from backend import database_crud
+from backend import markastools
 from backend.pakasir import create_pakasir_transaction, get_pakasir_transaction_detail, cancel_pakasir_transaction
 
 logger = logging.getLogger(__name__)
+
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+
+def is_valid_email(value: str) -> bool:
+    return bool(EMAIL_REGEX.match((value or "").strip()))
 
 # Main Keyboard
 def get_main_keyboard():
@@ -138,6 +145,14 @@ async def handle_beli_produk(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
         
     register_user_interaction(update.effective_user)
+
+    # Mulai belanja dari awal: buang sisa state input jumlah / email yang belum selesai
+    # (email Markastools yang sudah tersimpan tetap dipakai agar tidak perlu ketik ulang)
+    context.user_data.pop("waiting_email", None)
+    context.user_data.pop("pending_order", None)
+    context.user_data.pop("waiting_qty_prod_id", None)
+    context.user_data.pop("waiting_qty_stock", None)
+
     db = SessionLocal()
     try:
         categories = database_crud.get_categories(db)
@@ -268,6 +283,99 @@ def format_category_products_message(db, cat, products) -> tuple[str, InlineKeyb
     keyboard.append([InlineKeyboardButton("🔙 Kembali", callback_data="menu_cats")])
     
     return text, InlineKeyboardMarkup(keyboard)
+
+
+# ---------- Alur checkout: metode pembayaran & email Markastools ----------
+
+def build_payment_method_message(p, qty: int, include_va: bool = False, buyer_email: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    """Layar pemilihan metode pembayaran.
+
+    include_va=True menampilkan pilihan Virtual Account (dipakai pada alur input
+    jumlah manual), sedangkan alur tombol cepat hanya memakai QRIS.
+    """
+    text = (
+        f"🛒 *Metode Pembayaran*\n\n"
+        f"Produk: *{clean_md(p.name)}*\n"
+        f"Jumlah: *{qty}x*\n"
+        f"Total Harga: Rp {(p.price * qty):,.0f}\n"
+    )
+    if buyer_email:
+        text += f"📧 Email Markastools: `{clean_md(buyer_email)}`\n"
+    text += "\nSilakan pilih metode pembayaran yang ingin digunakan:"
+
+    keyboard = [
+        [InlineKeyboardButton("📱 QRIS (All E-Wallet / Bank)", callback_data=f"pay_{p.id}_{qty}_qris")]
+    ]
+    if include_va:
+        keyboard.append([
+            InlineKeyboardButton("🏦 BNI VA", callback_data=f"pay_{p.id}_{qty}_bni_va"),
+            InlineKeyboardButton("🏦 BRI VA", callback_data=f"pay_{p.id}_{qty}_bri_va"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🏦 CIMB VA", callback_data=f"pay_{p.id}_{qty}_cimb_niaga_va"),
+            InlineKeyboardButton("🏦 Permata VA", callback_data=f"pay_{p.id}_{qty}_permata_va"),
+        ])
+    keyboard.append([InlineKeyboardButton("🔙 Batal", callback_data=f"prod_{p.id}")])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_email_prompt_message(p, qty: int, provider: str) -> tuple[str, InlineKeyboardMarkup]:
+    """Minta email akun Markastools milik pembeli sebelum invoice dibuat."""
+    text = (
+        f"📧 *Masukkan Email Markastools Anda*\n\n"
+        f"Produk: *{clean_md(p.name)}*\n"
+        f"Jumlah: *{qty}x*\n"
+        f"Total: Rp {(p.price * qty):,.0f}\n\n"
+        f"Akun *{markastools.provider_label(provider)}* ini akan otomatis dimasukkan "
+        f"ke akun Anda di ai.markastools.id setelah pembayaran terverifikasi.\n\n"
+        f"Balas pesan ini dengan email akun Markastools Anda.\n"
+        f"⚠️ Pastikan email sudah terdaftar di ai.markastools.id dan tidak salah tulis."
+    )
+    keyboard = [[InlineKeyboardButton("🔙 Batal", callback_data=f"prod_{p.id}")]]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_email_confirm_message(p, qty: int, email: str, provider: str) -> tuple[str, InlineKeyboardMarkup]:
+    """Konfirmasi email yang sudah pernah dipakai pembeli di sesi ini."""
+    text = (
+        f"📧 *Konfirmasi Email Markastools*\n\n"
+        f"Produk: *{clean_md(p.name)}*\n"
+        f"Jumlah: *{qty}x*\n"
+        f"Total: Rp {(p.price * qty):,.0f}\n\n"
+        f"Akun *{markastools.provider_label(provider)}* akan dikirim ke:\n"
+        f"`{clean_md(email)}`\n\n"
+        f"Sudah benar?"
+    )
+    keyboard = [
+        [InlineKeyboardButton("✅ Ya, Lanjut Bayar", callback_data=f"payok_{p.id}_{qty}")],
+        [InlineKeyboardButton("✏️ Ganti Email", callback_data=f"email_{p.id}_{qty}")],
+        [InlineKeyboardButton("🔙 Batal", callback_data=f"prod_{p.id}")],
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_next_step_after_qty(context, p, qty: int, include_va: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+    """Tentukan layar berikutnya setelah jumlah pembelian diketahui.
+
+    Produk auto-inject wajib punya email Markastools dulu, produk biasa langsung
+    ke pemilihan metode pembayaran.
+    """
+    provider = markastools.normalize_provider(p.inject_provider)
+    if not provider:
+        context.user_data.pop("waiting_email", None)
+        context.user_data.pop("pending_order", None)
+        return build_payment_method_message(p, qty, include_va=include_va)
+
+    context.user_data["pending_order"] = {"prod_id": p.id, "qty": qty, "include_va": include_va}
+    email = (context.user_data.get("markastools_email") or "").strip()
+    if email:
+        context.user_data.pop("waiting_email", None)
+        return build_email_confirm_message(p, qty, email, provider)
+
+    context.user_data["waiting_email"] = True
+    return build_email_prompt_message(p, qty, provider)
+
 
 # Handle Callback Queries (Inline Keyboards)
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,32 +515,61 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode="Markdown"
             )
 
-        # Buy clicked: show payment methods
+        # Buy clicked: ask for Markastools email (auto-inject) or show payment methods
         elif data.startswith("buy_"):
             parts = data.split("_")
             prod_id = int(parts[1])
             qty = int(parts[2])
             p = database_crud.get_product_by_id(db, prod_id)
             stock_count = database_crud.get_available_stock_count(db, p.id)
-            
+
             if qty > stock_count:
                 await query.answer("Stok tidak mencukupi!", show_alert=True)
                 return
 
-            text = (
-                f"🛒 *Metode Pembayaran*\n\n"
-                f"Produk: *{clean_md(p.name)}*\n"
-                f"Jumlah: {qty}\n"
-                f"Total Harga: Rp {(p.price * qty):,.0f}\n\n"
-                "Silakan pilih metode pembayaran yang ingin digunakan:"
-            )
+            text, reply_markup = build_next_step_after_qty(context, p, qty)
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
 
-            # Standard payment methods supported by Pakasir
-            keyboard = [
-                [InlineKeyboardButton("📱 QRIS (All E-Wallet / Bank)", callback_data=f"pay_{p.id}_{qty}_qris")],
-                [InlineKeyboardButton("🔙 Batal", callback_data=f"prod_{p.id}")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+        # Email Markastools dikonfirmasi: lanjut ke pemilihan metode pembayaran
+        elif data.startswith("payok_"):
+            parts = data.split("_")
+            prod_id = int(parts[1])
+            qty = int(parts[2])
+            p = database_crud.get_product_by_id(db, prod_id)
+            stock_count = database_crud.get_available_stock_count(db, p.id)
+
+            if qty > stock_count:
+                await query.answer(f"Stok hanya tersisa {stock_count}!", show_alert=True)
+                return
+
+            pending = context.user_data.get("pending_order") or {}
+            email = (context.user_data.get("markastools_email") or "").strip()
+            if not email:
+                # Email hilang (mis. bot sempat restart) — minta ulang
+                text, reply_markup = build_next_step_after_qty(context, p, qty, include_va=pending.get("include_va", False))
+                await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+                return
+
+            text, reply_markup = build_payment_method_message(
+                p, qty, include_va=pending.get("include_va", False), buyer_email=email
+            )
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+
+        # Ganti email Markastools
+        elif data.startswith("email_"):
+            parts = data.split("_")
+            prod_id = int(parts[1])
+            qty = int(parts[2])
+            p = database_crud.get_product_by_id(db, prod_id)
+            provider = markastools.normalize_provider(p.inject_provider)
+
+            pending = context.user_data.get("pending_order") or {}
+            context.user_data["pending_order"] = {
+                "prod_id": p.id, "qty": qty, "include_va": pending.get("include_va", False)
+            }
+            context.user_data["waiting_email"] = True
+
+            text, reply_markup = build_email_prompt_message(p, qty, provider)
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
 
         # Create payment & order
@@ -459,6 +596,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.answer(f"Stok hanya tersisa {stock_count}!", show_alert=True)
                 return
 
+            # Produk auto-inject wajib punya email Markastools sebelum invoice dibuat
+            provider = markastools.normalize_provider(p.inject_provider)
+            buyer_email = (context.user_data.get("markastools_email") or "").strip() if provider else ""
+            if provider and not buyer_email:
+                text, reply_markup = build_next_step_after_qty(context, p, qty)
+                await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+                return
+
             # Calculate totals based on qty
             subtotal = p.price * qty
 
@@ -474,7 +619,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 amount=subtotal,
                 fee=0,
                 total_payment=subtotal,
-                payment_method=method
+                payment_method=method,
+                buyer_email=buyer_email or None
             )
 
             # Store qty in telegram_username field as a note (workaround — store as JSON prefix)
@@ -540,6 +686,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 f"⏳ *Batas Waktu:* {expired_formatted}\n\n"
             )
 
+            if provider:
+                detail_text += (
+                    f"📧 Akun *{markastools.provider_label(provider)}* otomatis dikirim ke "
+                    f"`{clean_md(buyer_email)}`\n\n"
+                )
+
             # Keyboard for status check/cancel
             tx_keyboard = [
                 [InlineKeyboardButton("🔄 Cek Pembayaran", callback_data=f"chk_{tx.order_id}")],
@@ -590,18 +742,29 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 return
 
             if tx.status == "completed":
-                # Already complete — resend as file
-                content = tx.product_item.content if tx.product_item else "Credentials manual (Hubungi Admin)"
+                # Already complete — resend as file (pakai seluruh item yang terkirim)
+                content = tx.delivered_content or (
+                    tx.product_item.content if tx.product_item else "Credentials manual (Hubungi Admin)"
+                )
+                note = ""
+                if tx.inject_status:
+                    provider = markastools.normalize_provider(tx.product.inject_provider if tx.product else None)
+                    note = _inject_note(
+                        tx.inject_status, provider, tx.buyer_email or "-",
+                        {"message": tx.inject_detail or ""}
+                    )
                 await query.edit_message_text(
                     f"✅ *Pembayaran sudah terverifikasi!*\n"
-                    f"Mengirimkan ulang file data produk Anda..."
+                    f"Mengirimkan ulang file data produk Anda...",
+                    parse_mode="Markdown"
                 )
                 await send_product_as_file(
                     bot=query.get_bot(),
                     chat_id=query.from_user.id,
                     order_id=tx.order_id,
                     product_name=tx.product.name if tx.product else "Produk",
-                    item_content=content
+                    item_content=content,
+                    inject_note=note
                 )
                 return
 
@@ -632,7 +795,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 completed_tx, item_content = database_crud.complete_transaction(db, tx.order_id)
                 if completed_tx.status == "completed":
                     val_content = item_content if item_content else "Hubungi admin untuk mendapatkan data manual (stok habis saat pembayaran)."
-                    
+
+                    # Auto-inject ke Markastools (kosong bila produk tidak memakai fitur ini)
+                    note = await inject_purchase(tx.order_id)
+
                     try:
                         await query.message.delete()
                     except Exception:
@@ -642,7 +808,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                         chat_id=query.from_user.id,
                         order_id=tx.order_id,
                         product_name=tx.product.name if tx.product else "Produk",
-                        item_content=val_content
+                        item_content=val_content,
+                        inject_note=note
                     )
                 else:
                     await query.answer("Gagal memproses transaksi. Hubungi admin.", show_alert=True)
@@ -687,14 +854,25 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         db.close()
 
 # Helper: Send product data as a .txt file
-async def send_product_as_file(bot, chat_id: int, order_id: str, product_name: str, item_content: str):
-    """Sends the product data as a downloadable .txt file to the user."""
+async def send_product_as_file(bot, chat_id: int, order_id: str, product_name: str, item_content: str,
+                               inject_note: str = ""):
+    """Sends the product data as a downloadable .txt file to the user.
+
+    inject_note (opsional) berisi hasil auto-inject ke Markastools dan
+    ditempelkan pada caption serta isi file.
+    """
     file_content = (
         f"============================\n"
         f"  ORDER: {order_id}\n"
         f"  PRODUK: {product_name}\n"
         f"============================\n\n"
         f"{item_content}\n\n"
+    )
+    if inject_note:
+        # Buang formatting Markdown agar rapi di dalam file teks
+        plain_note = inject_note.replace("*", "").replace("`", "")
+        file_content += f"----------------------------\n{plain_note}\n\n"
+    file_content += (
         f"============================\n"
         f"Terima kasih telah berbelanja!\n"
         f"Simpan file ini dengan aman.\n"
@@ -703,19 +881,146 @@ async def send_product_as_file(bot, chat_id: int, order_id: str, product_name: s
     file_bio = io.BytesIO(file_content.encode("utf-8"))
     file_bio.name = f"order_{order_id}.txt"
     file_bio.seek(0)
+
+    caption = (
+        f"✅ *PEMBAYARAN DITERIMA!*\n\n"
+        f"Order: `{order_id}`\n"
+        f"Produk: *{product_name}*\n\n"
+    )
+    if inject_note:
+        caption += f"{inject_note}\n\n"
+    caption += (
+        f"📄 Data produk Anda ada di file di atas.\n"
+        f"Simpan file tersebut dengan aman!"
+    )
+
     await bot.send_document(
         chat_id=chat_id,
         document=file_bio,
         filename=f"order_{order_id}.txt",
-        caption=(
-            f"✅ *PEMBAYARAN DITERIMA!*\n\n"
-            f"Order: `{order_id}`\n"
-            f"Produk: *{product_name}*\n\n"
-            f"📄 Data produk Anda ada di file di atas.\n"
-            f"Simpan file tersebut dengan aman!"
-        ),
+        caption=caption,
         parse_mode="Markdown"
     )
+
+
+# ---------- Auto-inject ke Markastools ----------
+
+def tokens_from_delivered_content(content: str) -> list:
+    """Isi stok tersimpan satu item per baris (lihat complete_transaction)."""
+    return [line.strip() for line in (content or "").split("\n") if line.strip()]
+
+
+def _inject_note(status: str, provider: str, email: str, summary: dict) -> str:
+    """Rangkum hasil auto-inject menjadi teks singkat untuk pembeli."""
+    label = markastools.provider_label(provider)
+    detail = (summary.get("message") or "")[:300]
+
+    if status == "success":
+        return (
+            f"🚀 *Akun {label} sudah otomatis masuk ke Markastools*\n"
+            f"📧 Email: `{clean_md(email)}`\n"
+            f"✅ {clean_md(detail)}\n"
+            f"Buka ai.markastools.id lalu refresh halaman akun Anda."
+        )
+    if status == "partial":
+        return (
+            f"⚠️ *Auto-inject {label} hanya sebagian berhasil*\n"
+            f"📧 Email: `{clean_md(email)}`\n"
+            f"{clean_md(detail)}\n"
+            f"Token mentah ada di file. Hubungi admin untuk sisanya."
+        )
+    return (
+        f"⚠️ *Auto-inject {label} ke Markastools gagal*\n"
+        f"📧 Email: `{clean_md(email)}`\n"
+        f"{clean_md(detail)}\n"
+        f"Token mentah tetap terkirim di file. Hubungi admin untuk bantuan."
+    )
+
+
+def save_inject_result(order_id: str, email: str, status: str, detail: str):
+    """Simpan hasil auto-inject ke transaksi memakai sesi DB tersendiri."""
+    db = SessionLocal()
+    try:
+        tx = database_crud.get_transaction_by_id(db, order_id)
+        if tx:
+            if email:
+                tx.buyer_email = email
+            tx.inject_status = status
+            tx.inject_detail = (detail or "")[:500]
+            db.commit()
+    except Exception:
+        logger.exception(f"Gagal menyimpan status auto-inject {order_id}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+async def inject_purchase(order_id: str, override_email: str = None) -> str:
+    """Kirim stok yang sudah dibayar ke akun Markastools pembeli.
+
+    Mengembalikan catatan siap-tampil untuk pembeli, atau string kosong bila
+    produk tidak memakai fitur auto-inject.
+    """
+    # Fase 1 — baca data pesanan lalu tutup sesi DB. Koneksi database tidak boleh
+    # ditahan selama panggilan HTTP ke Markastools (bisa sampai 30 detik), karena
+    # jatah koneksi Postgres di hosting terbatas.
+    db = SessionLocal()
+    try:
+        tx = database_crud.get_transaction_by_id(db, order_id)
+        if not tx:
+            return ""
+
+        product = tx.product
+        provider = markastools.normalize_provider(product.inject_provider if product else None)
+        if not provider:
+            return ""
+
+        email = (override_email or tx.buyer_email or "").strip()
+        recipe_id = product.inject_recipe_id if product else None
+        tokens = tokens_from_delivered_content(tx.delivered_content)
+    except Exception:
+        logger.exception(f"Gagal membaca data pesanan {order_id} untuk auto-inject")
+        return (
+            "⚠️ *Auto-inject ke Markastools gagal karena kesalahan internal*\n"
+            "Token mentah tetap terkirim di file. Hubungi admin untuk bantuan."
+        )
+    finally:
+        db.close()
+
+    if not email:
+        msg = "Email Markastools pembeli tidak tersedia."
+        save_inject_result(order_id, "", "failed", msg)
+        return _inject_note("failed", provider, "-", {"message": msg})
+
+    if not tokens:
+        msg = "Tidak ada stok terkirim untuk di-inject (stok habis saat pembayaran)."
+        save_inject_result(order_id, email, "failed", msg)
+        return _inject_note("failed", provider, email, {"message": msg})
+
+    # Fase 2 — requests bersifat blocking, jalankan di thread agar event loop bot tidak macet
+    try:
+        summary = await asyncio.to_thread(
+            markastools.add_accounts, email, tokens, provider, recipe_id
+        )
+    except Exception as e:
+        logger.exception(f"Error saat auto-inject order {order_id}")
+        msg = f"Kesalahan internal: {e}"
+        save_inject_result(order_id, email, "failed", msg)
+        return _inject_note("failed", provider, email, {"message": msg})
+
+    if summary.get("ok"):
+        status = "success"
+    elif summary.get("partial"):
+        status = "partial"
+    else:
+        status = "failed"
+
+    # Fase 3 — catat hasilnya
+    detail = summary.get("message") or ""
+    save_inject_result(order_id, email, status, detail)
+
+    logger.info(f"Auto-inject {order_id} -> {email} ({provider}): {status} | {detail}")
+    return _inject_note(status, provider, email, summary)
 
 
 # Generate QR Code binary stream helper
@@ -735,11 +1040,75 @@ def generate_qr_code(qr_string: str) -> io.BytesIO:
     bio.seek(0)
     return bio
 
+# Catch-all text handler: routes free text to whichever input step is active
+async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ["group", "supergroup"]:
+        return  # Ignore random text in groups
+
+    if context.user_data.get("waiting_email"):
+        await handle_email_input(update, context)
+        return
+
+    if context.user_data.get("waiting_qty_prod_id"):
+        await handle_manual_qty_input(update, context)
+
+
+# Handle Markastools email input (user types the email for an auto-inject product)
+async def handle_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pending = context.user_data.get("pending_order") or {}
+    prod_id = pending.get("prod_id")
+    qty = pending.get("qty")
+    if not prod_id or not qty:
+        # State hilang — bersihkan dan minta pembeli mulai ulang
+        context.user_data.pop("waiting_email", None)
+        await update.message.reply_text(
+            "Sesi pemesanan sudah kedaluwarsa. Silakan pilih produk lagi lewat menu 🛍️ Beli Produk."
+        )
+        return
+
+    email = (update.message.text or "").strip()
+    if not is_valid_email(email):
+        await update.message.reply_text(
+            "❌ Format email tidak valid. Contoh: `nama@gmail.com`\n"
+            "Silakan kirim ulang email akun Markastools Anda:",
+            parse_mode="Markdown"
+        )
+        return
+
+    db = SessionLocal()
+    try:
+        p = database_crud.get_product_by_id(db, prod_id)
+        if not p:
+            context.user_data.pop("waiting_email", None)
+            await update.message.reply_text("❌ Produk tidak ditemukan. Silakan pilih produk lagi.")
+            return
+
+        stock_count = database_crud.get_available_stock_count(db, p.id)
+        if qty > stock_count:
+            context.user_data.pop("waiting_email", None)
+            await update.message.reply_text(
+                f"❌ Maaf, stok sudah berubah. Sisa stok sekarang *{stock_count}*. Silakan pesan ulang.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Simpan email agar bisa dipakai lagi pada pembelian berikutnya di sesi ini
+        context.user_data["markastools_email"] = email
+        context.user_data.pop("waiting_email", None)
+
+        text, reply_markup = build_payment_method_message(
+            p, qty, include_va=pending.get("include_va", False), buyer_email=email
+        )
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Error handling email input: {e}")
+        await update.message.reply_text("❌ Terjadi kesalahan. Silakan coba lagi.")
+    finally:
+        db.close()
+
+
 # Handle manual quantity input (user types a number after clicking "Ketik Jumlah Sendiri")
 async def handle_manual_qty_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type in ["group", "supergroup"]:
-        return # Ignore random text in groups
-        
     prod_id = context.user_data.get("waiting_qty_prod_id")
     if not prod_id:
         # Not waiting for qty input, ignore
@@ -773,25 +1142,12 @@ async def handle_manual_qty_input(update: Update, context: ContextTypes.DEFAULT_
         context.user_data.pop("waiting_qty_prod_id", None)
         context.user_data.pop("waiting_qty_stock", None)
 
-        # Show payment method selection
-        total = p.price * qty
-        text_msg = (
-            f"🛒 *Metode Pembayaran*\n\n"
-            f"Produk: *{clean_md(p.name)}*\n"
-            f"Jumlah: *{qty}x*\n"
-            f"Total: Rp {total:,.0f}\n\n"
-            "Silakan pilih metode pembayaran:"
-        )
-        keyboard = [
-            [InlineKeyboardButton("📱 QRIS (All E-Wallet / Bank)", callback_data=f"pay_{p.id}_{qty}_qris")],
-            [InlineKeyboardButton("🏦 BNI VA", callback_data=f"pay_{p.id}_{qty}_bni_va"), InlineKeyboardButton("🏦 BRI VA", callback_data=f"pay_{p.id}_{qty}_bri_va")],
-            [InlineKeyboardButton("🏦 CIMB VA", callback_data=f"pay_{p.id}_{qty}_cimb_niaga_va"), InlineKeyboardButton("🏦 Permata VA", callback_data=f"pay_{p.id}_{qty}_permata_va")],
-            [InlineKeyboardButton("🔙 Batal", callback_data=f"qty_{p.id}")]
-        ]
+        # Produk auto-inject minta email dulu, produk biasa langsung ke pembayaran
+        text_msg, reply_markup = build_next_step_after_qty(context, p, qty, include_va=True)
         await update.message.reply_text(
             text_msg,
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=reply_markup
         )
     except Exception as e:
         logger.error(f"Error handling manual qty input: {e}")
@@ -862,26 +1218,38 @@ async def notify_user_payment_success(application: Application, order_id: str, i
 
         chat_id = tx.telegram_user_id
         product_name = tx.product.name if tx.product else "Produk"
-        
-        # Hapus pesan invoice pembayaran sebelumnya jika ada
-        if tx.invoice_msg_id:
-            try:
-                await application.bot.delete_message(chat_id=chat_id, message_id=tx.invoice_msg_id)
-            except Exception as del_err:
-                logger.error(f"Failed to delete invoice message for {order_id}: {del_err}")
-
-        try:
-            await send_product_as_file(
-                bot=application.bot,
-                chat_id=chat_id,
-                order_id=order_id,
-                product_name=product_name,
-                item_content=item_content
-            )
-        except Exception as bot_err:
-            logger.error(f"Error sending success file to telegram user {chat_id}: {bot_err}")
     finally:
         db.close()
+
+    # Auto-inject ke Markastools sebelum notifikasi dikirim (string kosong bila
+    # produk tidak memakai fitur ini). Sesi DB sendiri, di luar sesi di atas.
+    inject_note = await inject_purchase(order_id)
+
+    db = SessionLocal()
+    try:
+        tx = db.query(database_crud.Transaction).filter(database_crud.Transaction.order_id == order_id).first()
+        invoice_msg_id = tx.invoice_msg_id if tx else None
+    finally:
+        db.close()
+
+    # Hapus pesan invoice pembayaran sebelumnya jika ada
+    if invoice_msg_id:
+        try:
+            await application.bot.delete_message(chat_id=chat_id, message_id=invoice_msg_id)
+        except Exception as del_err:
+            logger.error(f"Failed to delete invoice message for {order_id}: {del_err}")
+
+    try:
+        await send_product_as_file(
+            bot=application.bot,
+            chat_id=chat_id,
+            order_id=order_id,
+            product_name=product_name,
+            item_content=item_content,
+            inject_note=inject_note
+        )
+    except Exception as bot_err:
+        logger.error(f"Error sending success file to telegram user {chat_id}: {bot_err}")
 
 # Init Bot Application instance
 def create_bot_app(token: str) -> Application:
@@ -896,7 +1264,7 @@ def create_bot_app(token: str) -> Application:
     application.add_handler(MessageHandler(filters.Text("ℹ️ Informasi Bot"), handle_informasi_bot))
     application.add_handler(MessageHandler(filters.Text("📞 Hubungi Admin"), handle_hubungi_admin))
     application.add_handler(CallbackQueryHandler(handle_callback_query))
-    # Catch-all text handler for manual qty input (lowest priority)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manual_qty_input))
+    # Catch-all text handler for manual qty / email input (lowest priority)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     
     return application
