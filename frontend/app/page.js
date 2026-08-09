@@ -1530,7 +1530,7 @@ export default function AdminDashboard() {
 
           {/* MODAL: MANAGE STOCK */}
           {modalType === "manage_stock" && selectedProduct && (
-            <div className="modal-content" style={{ width: "650px" }}>
+            <div className="modal-content" style={{ width: "1100px", maxWidth: "95vw" }}>
               <div className="modal-header">
                 <h3 className="modal-title">Kelola Stok: {selectedProduct.name}</h3>
                 <button className="modal-close" onClick={() => setModalType(null)}><X size={20} /></button>
